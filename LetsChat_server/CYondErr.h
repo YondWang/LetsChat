@@ -12,7 +12,9 @@ const YondErrCode YOND_ERR_SOCKET_ACCEPT = 2003; // Error accepting connection
 const YondErrCode YOND_ERR_SOCKET_SEND = 2004; // Error sending data
 const YondErrCode YOND_ERR_SOCKET_RECV = 2005; // Error receiving data
 
-const YondErrCode YOND_ERR_SOCKET_EPOLL_CREATE = 2006; // Error creating epoll instance
+const YondErrCode YOND_ERR_EPOLL_CREATE = 2006; // Error creating epoll instance
+const YondErrCode YOND_ERR_EPOLL_CTL = 2007; // Error adding or modifying epoll event
+const YondErrCode YOND_ERR_EPOLL_WAIT = 2008; // Error waiting for epoll events
 
 #endif // !_COMMON_ERROR_CODE_H_
 

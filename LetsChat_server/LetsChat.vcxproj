@@ -78,13 +78,17 @@
   <ItemGroup>
     <ClCompile Include="CChatServer.cpp" />
     <ClCompile Include="CYondSocket.cpp" />
+    <ClCompile Include="CYondThreadPool.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="CYondHandleEvent.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CChatServer.h" />
     <ClInclude Include="CYondErr.h" />
     <ClInclude Include="CYondSocket.h" />
     <ClInclude Include="CYondLog.h" />
+    <ClInclude Include="CYondHandleEvent.h" />
+    <ClInclude Include="CYondThreadPool.h" />
   </ItemGroup>
   <ItemDefinitionGroup />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
