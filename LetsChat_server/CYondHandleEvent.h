@@ -1,105 +1,163 @@
 #pragma once
+#include "CYondLog.h"
+#include "Packet.h"
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#include <string>
-#include <map>
-#include "CYondThreadPool.h"
-#include "CYondLog.h"
 #include <arpa/inet.h>
+#include <map>
+#include <string>
+#include <vector>
 
-// 消息包结构
-struct ChatMessage {
-	int type;           // 消息类型
-	std::string sender; // 发送者
-	std::string content;// 消息内容
-	std::string target; // 目标接收者
-};
-
-class CYondHandleEvent
-{
+class CYondHandleEvent {
 public:
-	CYondHandleEvent() : m_threadPool(4) {
-		LOG_INFO("Thread pool initialized with 4 worker threads");
+	CYondHandleEvent() : m_epollFd(-1) {}
+	~CYondHandleEvent() {
+		if (m_epollFd != -1) {
+			close(m_epollFd);
+		}
 	}
 
-	int addNew(epoll_event* epEvt) {
-		struct sockaddr_in clientAddr;
-		socklen_t clientLen = sizeof(clientAddr);
-		int clientFd = accept(epEvt->data.fd, (struct sockaddr*)&clientAddr, &clientLen);
-		
-		if (clientFd < 0) {
-			return LOG_ERROR(YOND_ERR_SOCKET_ACCEPT, "Failed to accept new connection");
+	bool Initialize() {
+		m_epollFd = epoll_create1(0);
+		if (m_epollFd == -1) {
+			LOG_ERROR(YOND_ERR_EPOLL_CREATE, "Failed to create epoll instance");
+			return false;
 		}
+		return true;
+	}
 
-		// 将新客户端添加到epoll
+	bool addNew(int sockfd, const std::string& clientAddr) {
 		struct epoll_event ev;
 		ev.events = EPOLLIN;
-		ev.data.fd = clientFd;
-		if (epoll_ctl(epEvt->data.fd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
-			close(clientFd);
-			return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add client to epoll");
+		ev.data.fd = sockfd;
+
+		if (epoll_ctl(m_epollFd, EPOLL_CTL_ADD, sockfd, &ev) == -1) {
+			LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add socket to epoll");
+			return false;
 		}
 
-		// 记录新客户端
-		m_clients[clientFd] = std::string(inet_ntoa(clientAddr.sin_addr));
-		LOG_INFO("New client connected: " + m_clients[clientFd]);
-		
-		return 0;
+		m_clients[sockfd] = clientAddr;
+		LOG_INFO("New client connected: " + clientAddr);
+
+		// 发送欢迎消息
+		Packet welcomeMsg = Packet::createSystemMessage("Welcome to the chat server!");
+		sendPacket(sockfd, welcomeMsg);
+		return true;
 	}
 
-	int HandleEvent(epoll_event* events) {
-		char buffer[1024];
-		int n = recv(events->data.fd, buffer, sizeof(buffer), 0);
-		
-		if (n <= 0) {
-			// 客户端断开连接
-			LOG_INFO("Client disconnected: " + m_clients[events->data.fd]);
-			close(events->data.fd);
-			m_clients.erase(events->data.fd);
-			return 0;
+	void HandleEvent(int sockfd) {
+		char buffer[Packet::MAX_DATA_SIZE];
+		ssize_t bytesRead = recv(sockfd, buffer, sizeof(buffer), 0);
+
+		if (bytesRead <= 0) {
+			if (bytesRead == 0) {
+				LOG_INFO("Client disconnected: " + m_clients[sockfd]);
+			} else {
+				LOG_ERROR(YOND_ERR_SOCKET_RECV, "Error receiving data from client: " + m_clients[sockfd]);
+			}
+			removeClient(sockfd);
+			return;
 		}
 
-		// 将消息处理任务提交到线程池
-		m_threadPool.Enqueue([this, fd = events->data.fd, data = std::string(buffer, n)]() {
-			ProcessMessage(fd, data);
-		});
+		Packet packet;
+		if (!packet.parse(buffer, bytesRead)) {
+			LOG_ERROR(YOND_ERR_PACKET_PARSE, "Failed to parse packet from client: " + m_clients[sockfd]);
+			return;
+		}
 
-		return 0;
+		ProcessMessage(sockfd, packet);
 	}
 
 private:
-	void ProcessMessage(int clientFd, const std::string& data) {
-		// 这里实现消息解析和处理逻辑
-		ChatMessage msg;
-		// TODO: 解析data到msg结构
-		
-		switch (msg.type) {
-			case 1: // 私聊消息
-				HandlePrivateMessage(msg);
+	void ProcessMessage(int sockfd, const Packet& packet) {
+		switch (packet.getType()) {
+			case Packet::Type::ChatMessage: {
+				std::string sender, content;
+				packet.getChatMessage(sender, content);
+				broadcastMessage(sender, content);
 				break;
-			case 2: // 群发消息
-				HandleBroadcastMessage(msg);
+			}
+			case Packet::Type::FileStart: {
+				std::string fileName;
+				uint32_t fileSize;
+				packet.getFileStart(fileName, fileSize);
+				handleFileStart(sockfd, fileName, fileSize);
 				break;
-			default:
-				LOG_WARNING("Unknown message type: " + std::to_string(msg.type));
+			}
+			case Packet::Type::FileData: {
+				const char* data;
+				uint32_t size;
+				packet.getFileData(data, size);
+				handleFileData(sockfd, data, size);
+				break;
+			}
+			case Packet::Type::FileEnd:
+				handleFileEnd(sockfd);
+				break;
+			case Packet::Type::SystemMessage: {
+				std::string content;
+				packet.getSystemMessage(content);
+				broadcastSystemMessage(content);
+				break;
+			}
 		}
 	}
 
-	void HandlePrivateMessage(const ChatMessage& msg) {
-		LOG_INFO("Private message from " + msg.sender + " to " + msg.target);
-		// 实现私聊消息处理逻辑
-		// TODO: 根据msg.target找到目标客户端并发送消息
+	void broadcastMessage(const std::string& sender, const std::string& content) {
+		Packet packet = Packet::createChatMessage(sender, content);
+		for (const auto& client : m_clients) {
+			sendPacket(client.first, packet);
+		}
 	}
 
-	void HandleBroadcastMessage(const ChatMessage& msg) {
-		LOG_INFO("Broadcast message from " + msg.sender);
-		// 实现群发消息处理逻辑
-		// TODO: 向所有客户端广播消息
+	void broadcastSystemMessage(const std::string& content) {
+		Packet packet = Packet::createSystemMessage(content);
+		for (const auto& client : m_clients) {
+			sendPacket(client.first, packet);
+		}
 	}
 
-	CYondThreadPool m_threadPool;
-	std::map<int, std::string> m_clients; // 客户端fd到IP地址的映射
+	void handleFileStart(int sockfd, const std::string& fileName, uint32_t fileSize) {
+		// 实现文件传输开始的处理逻辑
+		LOG_INFO("File transfer started: " + fileName + " (" + std::to_string(fileSize) + " bytes)");
+	}
+
+	void handleFileData(int sockfd, const char* data, uint32_t size) {
+		// 实现文件数据传输的处理逻辑
+		LOG_INFO("Received file data: " + std::to_string(size) + " bytes");
+	}
+
+	void handleFileEnd(int sockfd) {
+		// 实现文件传输结束的处理逻辑
+		LOG_INFO("File transfer completed");
+	}
+
+	void sendPacket(int sockfd, const Packet& packet) {
+		const PacketHeader* header = packet.getHeader();
+		const char* data = packet.getData();
+		
+		// 发送头部
+		if (send(sockfd, header, packet.getHeaderSize(), 0) == -1) {
+			LOG_ERROR(YOND_ERR_SOCKET_SEND, "Failed to send packet header");
+			return;
+		}
+
+		// 发送数据
+		if (packet.getDataSize() > 0 && send(sockfd, data, packet.getDataSize(), 0) == -1) {
+			LOG_ERROR(YOND_ERR_SOCKET_SEND, "Failed to send packet data");
+		}
+	}
+
+	void removeClient(int sockfd) {
+		if (m_clients.find(sockfd) != m_clients.end()) {
+			m_clients.erase(sockfd);
+			close(sockfd);
+		}
+	}
+
+	int m_epollFd;
+	std::map<int, std::string> m_clients;
 };
 
