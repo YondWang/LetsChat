@@ -24,11 +24,11 @@ public:
 		LOG_INFO("Thread pool initialized with 4 worker threads");
 	}
 
-	int addNew(epoll_event* epEvt) {
+	int addNew(epoll_event* epEvt, int epollFd) {
 		struct sockaddr_in clientAddr;
 		socklen_t clientLen = sizeof(clientAddr);
 		int clientFd = accept(epEvt->data.fd, (struct sockaddr*)&clientAddr, &clientLen);
-		
+		//LOG_INFO("accept a new client!");
 		if (clientFd < 0) {
 			return LOG_ERROR(YOND_ERR_SOCKET_ACCEPT, "Failed to accept new connection");
 		}
@@ -37,7 +37,7 @@ public:
 		struct epoll_event ev;
 		ev.events = EPOLLIN;
 		ev.data.fd = clientFd;
-		if (epoll_ctl(epEvt->data.fd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
+		if (epoll_ctl(epollFd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
 			close(clientFd);
 			return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add client to epoll");
 		}

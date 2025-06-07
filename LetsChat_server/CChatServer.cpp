@@ -4,6 +4,7 @@ CChatServer* CChatServer::m_instance = NULL;
 
 int CChatServer::EpollDo(epoll_event* alevt) {
 	int err = 0;
+	m_bStop = false;
 	while (!m_bStop) {
 		int eventMnt = epoll_wait(m_nEpollFd, alevt, MAX_EVENTS, 1000);
 		if (eventMnt == -1) {
@@ -11,7 +12,7 @@ int CChatServer::EpollDo(epoll_event* alevt) {
 		}
 		for (int i = 0; i < eventMnt; i++) {
 			if (alevt[i].data.fd == m_nSockFd) {
-				err = m_handleEvent.addNew(&alevt[i]);
+				err = m_handleEvent.addNew(&alevt[i], m_nEpollFd);
 			}
 			else {
 				err = m_handleEvent.HandleEvent(&alevt[i]);
