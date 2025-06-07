@@ -24,6 +24,7 @@ public:
 		return m_instance;
 	}
 
+	int EpollDo (epoll_event* alevt);
 	int StartService();
 
 	int InitSocket() {
@@ -56,7 +57,7 @@ public:
 		return 0;
 	}
 
-	CChatServer() : m_nSockFd(-1), m_nEpollFd(-1) {
+	CChatServer() : m_nSockFd(-1), m_nEpollFd(-1), m_bStop(true) {
 		LOG_INFO("Chat server instance created");
 	}
 
@@ -67,5 +68,6 @@ private:
 	int m_nEpollFd;
 	CYondHandleEvent m_handleEvent;
 	static CChatServer* m_instance;
+	bool m_bStop;
 };
 

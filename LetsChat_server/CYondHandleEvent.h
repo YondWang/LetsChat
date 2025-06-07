@@ -51,7 +51,7 @@ public:
 
 	int HandleEvent(epoll_event* events) {
 		char buffer[1024];
-		int n = recv(events->data.fd, buffer, sizeof(buffer), 0);
+		size_t n = recv(events->data.fd, buffer, sizeof(buffer), 0);
 		
 		if (n <= 0) {
 			// 客户端断开连接
