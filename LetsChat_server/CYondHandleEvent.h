@@ -8,6 +8,7 @@
 #include "CYondThreadPool.h"
 #include "CYondLog.h"
 #include <arpa/inet.h>
+#include "CYondPack.h"
 
 // 消息包结构
 struct ChatMessage {

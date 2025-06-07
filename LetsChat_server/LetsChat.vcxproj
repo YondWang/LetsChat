@@ -77,6 +77,7 @@
   <PropertyGroup Label="UserMacros" />
   <ItemGroup>
     <ClCompile Include="CChatServer.cpp" />
+    <ClCompile Include="CYondPack.cpp" />
     <ClCompile Include="CYondSocket.cpp" />
     <ClCompile Include="CYondThreadPool.cpp" />
     <ClCompile Include="main.cpp" />
@@ -85,6 +86,7 @@
   <ItemGroup>
     <ClInclude Include="CChatServer.h" />
     <ClInclude Include="CYondErr.h" />
+    <ClInclude Include="CYondPack.h" />
     <ClInclude Include="CYondSocket.h" />
     <ClInclude Include="CYondLog.h" />
     <ClInclude Include="CYondHandleEvent.h" />
