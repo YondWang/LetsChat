@@ -29,6 +29,7 @@ const YondErrCode YOND_ERR_EPOLL_CTL = 2007; // Error adding or modifying epoll 
 const YondErrCode YOND_ERR_EPOLL_WAIT = 2008; // Error waiting for epoll events
 
 const YondErrCode YOND_ERR_THREAD_CREATE = 2009; // Error creating thread
+const YondErrCode YOND_ERR_THREADPOOL_INVOKE = 2010; //Error invoke thread in threadpool
 
 #endif // !_COMMON_ERROR_CODE_H_
 

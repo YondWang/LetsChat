@@ -20,7 +20,7 @@ struct ChatMessage {
 class CYondHandleEvent
 {
 public:
-	CYondHandleEvent() : m_threadPool(4) {
+	CYondHandleEvent(int epollFd) : m_epollFd(epollFd), m_threadPool(4) {
 		LOG_INFO("Thread pool initialized with 4 worker threads");
 	}
 
@@ -37,7 +37,7 @@ public:
 		struct epoll_event ev;
 		ev.events = EPOLLIN;
 		ev.data.fd = clientFd;
-		if (epoll_ctl(epEvt->data.fd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
+		if (epoll_ctl(m_epollFd, EPOLL_CTL_ADD, clientFd, &ev) < 0) {
 			close(clientFd);
 			return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add client to epoll");
 		}
@@ -51,7 +51,7 @@ public:
 
 	int HandleEvent(epoll_event* events) {
 		char buffer[1024];
-		int n = recv(events->data.fd, buffer, sizeof(buffer), 0);
+		size_t n = recv(events->data.fd, buffer, sizeof(buffer), 0);
 		
 		if (n <= 0) {
 			// 客户端断开连接
@@ -99,6 +99,7 @@ private:
 		// TODO: 向所有客户端广播消息
 	}
 
+	int m_epollFd;
 	CYondThreadPool m_threadPool;
 	std::map<int, std::string> m_clients; // 客户端fd到IP地址的映射
 };

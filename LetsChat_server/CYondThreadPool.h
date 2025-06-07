@@ -6,48 +6,136 @@
 #include <queue>
 #include <functional>
 #include <condition_variable>
+#include <atomic>
 #include "CYondLog.h"
+#include "CYondHandleEvent.h"
 
-class CYondThreadPool
-{
+//class CYondHandleEvent;
+
+// 基础线程类，用于封装具体的业务线程逻辑
+class CYondThread {
+public:
+	CYondThread() : m_bIsRunning(false) {
+		LOG_INFO("Thread instance created");
+	}
+	
+	~CYondThread() {
+		Stop();
+		LOG_INFO("Thread instance destroyed");
+	}
+
+	void SetWorker(std::function<void()> worker) {
+		m_worker = std::move(worker);
+	}
+
+	bool Start() {
+		std::unique_lock<std::mutex> lock(m_lock);
+		if (m_bIsRunning) {
+			LOG_ERROR(YOND_ERR_THREAD_CREATE, "Thread is already running");
+			return false;
+		}
+
+		m_bIsRunning = true;
+		m_thread = std::thread([this]() {
+			LOG_INFO("Thread started");
+			if (m_worker) {
+				m_worker();
+			}
+			this->Stop();
+		});
+		
+		return true;
+	}
+
+	void Stop() {
+		std::unique_lock<std::mutex> lock(m_lock);
+		if (!m_bIsRunning) return;
+
+		if (m_thread.joinable()) {
+			m_thread.join();
+		}
+		m_bIsRunning = false;
+		LOG_INFO("Thread stopped");
+	}
+
+	bool IsRunning() {
+		std::unique_lock<std::mutex> lock(m_lock);
+		return m_bIsRunning;
+	}
+
+private:
+	std::thread m_thread;
+	std::mutex m_lock;
+	bool m_bIsRunning;
+	int m_epollFd;
+	std::function<void()> m_worker;
+	//CYondHandleEvent* m_pHandleEvent;
+};
+
+// 线程池类，用于管理线程资源
+class CYondThreadPool {
 public:
 	CYondThreadPool(size_t threads = 6) : m_bStop(false) {
-		m_vThreads.resize(threads);
-		for (size_t i = 0; i < m_vThreads.size(); ++i) {
-			m_vThreads[i] = new std::thread(&CYondThreadPool::WorkerThread, this);
+		for (size_t i = 0; i < threads; ++i) {
+			m_vpThreads.push_back(new CYondThread());
 		}
 		LOG_INFO("Thread pool initialized with " + std::to_string(threads) + " worker threads");
 	}
 
 	~CYondThreadPool() {
-		{
-			std::unique_lock<std::mutex> lock(m_lock);
-			m_bStop = true;
-		}
-		m_condition.notify_all();
-		
-		for (auto& thread : m_vThreads) {
-			if (thread->joinable()) {
-				thread->join();
-			}
+		Stop();
+		for (auto thread : m_vpThreads) {
 			delete thread;
 		}
-		LOG_INFO("Thread pool destroyed");
+		m_vpThreads.clear();
+	}
+
+	int Invoke() {
+		int err = 0;
+		for (size_t i = 0; i < m_vpThreads.size(); i++) {
+			if (m_vpThreads[i]->Start() == false) {
+				err = LOG_ERROR(YOND_ERR_THREADPOOL_INVOKE, "Error invoke thread in threadpool");
+				break;
+			}
+		}
+		if (err != 0) {
+			for (size_t i = 0; i < m_vpThreads.size(); i++) {
+				m_vpThreads[i]->Stop();
+			}
+		}
+		return err;
+	}
+
+	int Stop() {
+		for (size_t i = 0; i < m_vpThreads.size(); i++) {
+			m_vpThreads[i]->Stop();
+		}
+		return LOG_INFO("Thread pool destroyed");
 	}
 
 	template<class F>
 	void Enqueue(F&& f) {
 		{
 			std::unique_lock<std::mutex> lock(m_lock);
-			m_tasks.emplace(std::forward<F>(f));
+			m_tasks.push(std::forward<F>(f));
 		}
 		m_condition.notify_one();
+	}
+
+	void SetThreadWorker(size_t index, std::function<void()> worker) {
+		if (index < m_vpThreads.size()) {
+			m_vpThreads[index]->SetWorker(std::move(worker));
+		}
+	}
+
+	bool IsStopped() const {
+		return m_bStop;
 	}
 
 private:
 	void WorkerThread() {
 		LOG_INFO("Worker thread started");
-		while (true) {
+		while (!m_bStop) {
 			std::function<void()> task;
 			{
 				std::unique_lock<std::mutex> lock(m_lock);
@@ -69,62 +157,7 @@ private:
 
 	std::mutex m_lock;
 	std::condition_variable m_condition;
-	std::vector<std::thread*> m_vThreads;
+	std::vector<CYondThread*> m_vpThreads;
 	std::queue<std::function<void()>> m_tasks;
-	bool m_bStop;
-};
-
-class CYondThread {
-public:
-	CYondThread() : m_hThread(nullptr), m_bIsRunning(false) {
-		LOG_INFO("Thread instance created");
-	}
-	
-	~CYondThread() {
-		Stop();
-		LOG_INFO("Thread instance destroyed");
-	}
-
-	template<class F>
-	int Start(F&& f) {
-		std::unique_lock<std::mutex> lock(m_lock);
-		if (m_bIsRunning) {
-			return LOG_WARNING("Thread is already running");
-		}
-
-		try {
-			m_hThread = new std::thread(std::forward<F>(f));
-			m_bIsRunning = true;
-			LOG_INFO("Thread started successfully");
-			return 0;
-		} catch (const std::exception& e) {
-			return LOG_ERROR(YOND_ERR_THREAD_CREATE, "Failed to start thread: " + std::string(e.what()));
-		}
-	}
-
-	int Stop() {
-		std::unique_lock<std::mutex> lock(m_lock);
-		if (!m_bIsRunning) {
-			return 0;
-		}
-
-		if (m_hThread && m_hThread->joinable()) {
-			m_hThread->join();
-			delete m_hThread;
-			m_hThread = nullptr;
-		}
-		m_bIsRunning = false;
-		LOG_INFO("Thread stopped");
-		return 0;
-	}
-
-	bool IsRunning() {
-		std::unique_lock<std::mutex> lock(m_lock);
-		return m_bIsRunning;
-	}
-
-private:
-	std::thread* m_hThread;
-	std::mutex m_lock;
-	bool m_bIsRunning;
+	std::atomic<bool> m_bStop;
 };
