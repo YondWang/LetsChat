@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "CChatServer.h"
 #include "CYondLog.h"
+#include "CYondThreadPool.h"
 
 int main()
 {
@@ -18,8 +19,13 @@ int main()
     }
 
     LOG_INFO("Starting chat server...");
-    
-    int err = CChatServer::GetInstance()->StartService();
+    CYondThread StartThread;
+    int err = 0;
+    StartThread.Start([&err]() {
+        err = CChatServer::GetInstance()->StartService();
+    });
+    StartThread.Detach();
+
     if (err != 0) {
         LOG_ERROR(err, "Service start failed");
     }
@@ -28,6 +34,8 @@ int main()
     }
 
     getchar();
+    StartThread.Stop();
+    CChatServer::GetInstance()->StopService();
 
     // 关闭日志系统
     CYondLog::Shutdown();

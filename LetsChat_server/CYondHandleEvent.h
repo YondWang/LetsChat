@@ -9,14 +9,7 @@
 #include "CYondLog.h"
 #include <arpa/inet.h>
 #include "CYondPack.h"
-
-// 消息包结构
-struct ChatMessage {
-	int type;           // 消息类型
-	std::string sender; // 发送者
-	std::string content;// 消息内容
-	std::string target; // 目标接收者
-};
+#include <iostream>
 
 class CYondHandleEvent
 {
@@ -43,17 +36,17 @@ public:
 			return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add client to epoll");
 		}
 
-		// 记录新客户端
-		m_clients[clientFd] = std::string(inet_ntoa(clientAddr.sin_addr));
+		
 		LOG_INFO("New client connected: " + m_clients[clientFd]);
 		
 		return 0;
 	}
 
 	int HandleEvent(epoll_event* events) {
-		char buffer[1024];
+		char buffer[2048];
 		size_t n = recv(events->data.fd, buffer, sizeof(buffer), 0);
-		
+		printf("%02X\r\n", buffer);
+
 		if (n <= 0) {
 			// 客户端断开连接
 			LOG_INFO("Client disconnected: " + m_clients[events->data.fd]);
@@ -64,6 +57,7 @@ public:
 
 		// 将消息处理任务提交到线程池
 		m_threadPool.Enqueue([this, fd = events->data.fd, data = std::string(buffer, n)]() {
+			printf("PROCESS PACKET: %02X %d\r\n", data.c_str(), data.size());
 			ProcessMessage(fd, data);
 		});
 
@@ -72,32 +66,65 @@ public:
 
 private:
 	void ProcessMessage(int clientFd, const std::string& data) {
-		// 这里实现消息解析和处理逻辑
-		ChatMessage msg;
-		// TODO: 解析data到msg结构
-		
-		switch (msg.type) {
-			case 1: // 私聊消息
-				HandlePrivateMessage(msg);
-				break;
-			case 2: // 群发消息
-				HandleBroadcastMessage(msg);
-				break;
-			default:
-				LOG_WARNING("Unknown message type: " + std::to_string(msg.type));
+		CYondPack msg;
+		size_t size = data.size();
+		const unsigned char* pData = (const unsigned char*)(data.c_str());
+		msg = CYondPack(pData, size);
+
+		if (size == 0) {
+			LOG_ERROR(YOND_ERR_RECV_PACKET, "Invalid message format");
+			return;
+		}
+
+		switch (msg.m_sCmd) {
+		case YConnect:
+			// 处理连接请求
+			// 记录新客户端
+			m_clients[clientFd] = msg.Data().c_str();
+			LOG_INFO("Client " + m_clients[clientFd] + " connected");
+			break;
+
+		case YMsg:
+			// 广播消息给所有客户端
+			if (!msg.m_strData.empty()) {
+				LOG_INFO("Broadcasting message from " + m_clients[clientFd] + ": " + msg.m_strData);
+				BroadCastToAll(clientFd, msg.m_strData);
+			}
+			break;
+
+		case YFile:
+			// 处理文件传输请求
+			if (!msg.m_strData.empty()) {
+				LOG_INFO("File transfer request from " + m_clients[clientFd] + ": " + msg.m_strData);
+				// TODO: 实现文件传输逻辑
+			}
+			break;
+
+		case YRecv:
+			// 处理文件接收请求
+			if (!msg.m_strData.empty()) {
+				LOG_INFO("File receive request from " + m_clients[clientFd] + ": " + msg.m_strData);
+				// TODO: 实现文件接收逻辑
+			}
+			break;
+
+		default:
+			LOG_WARNING("Unknown message type: " + std::to_string(msg.m_sCmd));
 		}
 	}
 
-	void HandlePrivateMessage(const ChatMessage& msg) {
-		LOG_INFO("Private message from " + msg.sender + " to " + msg.target);
-		// 实现私聊消息处理逻辑
-		// TODO: 根据msg.target找到目标客户端并发送消息
-	}
+	void BroadCastToAll(int senderFd, const std::string& message) {
+		CYondPack broadcastMsg(YMsg, message.c_str(), message.size());
+		const char* data = broadcastMsg.Data().c_str();
+		size_t size = broadcastMsg.Size();
 
-	void HandleBroadcastMessage(const ChatMessage& msg) {
-		LOG_INFO("Broadcast message from " + msg.sender);
-		// 实现群发消息处理逻辑
-		// TODO: 向所有客户端广播消息
+		for (const auto& client : m_clients) {
+			if (client.first != senderFd) {  // 不发送给发送者
+				if (send(client.first, data, size, 0) < 0) {
+					LOG_ERROR(YOND_ERR_SOCKET_SEND, "Failed to broadcast message to client " + client.second);
+				}
+			}
+		}
 	}
 
 	CYondThreadPool m_threadPool;

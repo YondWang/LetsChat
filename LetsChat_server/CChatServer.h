@@ -8,6 +8,7 @@
 #include <string.h>
 #include "CYondLog.h"
 #include "CYondHandleEvent.h"
+#include "CYondThreadPool.h"
 #include <error.h>
 
 
@@ -26,6 +27,7 @@ public:
 
 	int EpollDo (epoll_event* alevt);
 	int StartService();
+	int StopService();
 
 	int InitSocket() {
 		if(m_nSockFd != -1) 

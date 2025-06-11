@@ -3,12 +3,15 @@
 
 #include "ui_widget.h"
 #include "dialog.h"
-#include "netinit.h"
+#include "messagebroadcaster.h"
+#include "filetransfer.h"
 
 #include <QWidget>
 #include <QString>
 #include <QListWidgetItem>
 #include <QFile>
+#include <QProgressDialog>
+#include <QTime>
 
 #define BUFFER_SIZE 4096
 
@@ -32,28 +35,32 @@ private slots:
     void on_sendFile_pb_clicked();
 
     void on_send_pb_clicked();
-    void on_MessageReceived(const QString &message);   
+    
+    void handleMessageReceived(const QString &sender, const QString &message);
+    void handleUserLoggedIn(const QString &username);
+    void handleUserLoggedOut(const QString &username);
+    void handleFileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
+    void handleFileDownloadRequested(const QString &filename, const QString &sender);
+    void handleConnectionError(const QString &error);
+    
+    void handleUploadProgress(qint64 bytesSent, qint64 bytesTotal);
+    void handleDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+    void handleUploadFinished();
+    void handleDownloadFinished();
+    void handleFileTransferError(const QString &errorMessage);
 
 private:
-    NetInit network_serve;
-    QString usr_name;
-    QString msg_content_send;
+    MessageBroadcaster *m_broadcaster;
+    FileTransfer *m_fileTransfer;
+    QString m_username;
     Ui::Widget *ui;
-
-    QFile file_to_send;
-    QFile file_to_receive;
-    qint64 bytes_sent = 0;
-    qint64 bytes_received = 0;
-    qint64 total_file_size = 0;
-    QString received_file_name;
-
-    //msg handle
-    void handleNormalMsg(const QStringList &messageParts);
-    void handleFileMsg(const QStringList &messageParts);
-    void handleLogMsg(const QStringList &messageParts);
-
-    void handleDownloadFile(const QStringList &messageParts);
-
-    void sendFileData();
+    
+    QProgressDialog *m_uploadProgress;
+    QProgressDialog *m_downloadProgress;
+    
+    void setupConnections();
+    void updateUserList();
+    void displayMessage(const QString &sender, const QString &message);
+    void displayFileMessage(const QString &sender, const QString &filename, qint64 filesize);
 };
 #endif // WIDGET_H

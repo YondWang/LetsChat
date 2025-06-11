@@ -38,16 +38,16 @@ int CChatServer::StartService() {
 		return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add socket to epoll");
 	}
 
+	err = EpollDo(all_events);
 	LOG_INFO("Server started, waiting for connections...");
 
-	std::thread epollThread([this, &all_events]() {
-		return EpollDo(all_events);
-	});
-	epollThread.detach();
-	
-	getchar();
+	return err;
+}
+
+int CChatServer::StopService()
+{
 	m_bStop = true;
 	close(m_nSockFd);
 	close(m_nEpollFd);
-	return err;
+	return 0;
 }

@@ -105,7 +105,7 @@ public:
 	int Stop() {
 		std::unique_lock<std::mutex> lock(m_lock);
 		if (!m_bIsRunning) {
-			return 0;
+			return LOG_WARNING("Thread is already running");
 		}
 
 		if (m_hThread && m_hThread->joinable()) {
@@ -114,13 +114,17 @@ public:
 			m_hThread = nullptr;
 		}
 		m_bIsRunning = false;
-		LOG_INFO("Thread stopped");
-		return 0;
+		return LOG_INFO("Thread stopped");
 	}
 
 	bool IsRunning() {
 		std::unique_lock<std::mutex> lock(m_lock);
 		return m_bIsRunning;
+	}
+
+	int Detach() {
+		m_hThread->detach();
+		return 0;
 	}
 
 private:

@@ -1,354 +1,226 @@
 #include "widget.h"
-#include <QDebug>
+#include "ui_widget.h"
+#include <QMessageBox>
 #include <QFileDialog>
-#include <QListWidgetItem>
-#include <QWidget>
-#include <QtWidgets>
-#include <QSocketNotifier>
-#define PACKAGE_SIZE 4096
+#include <QFileInfo>
 
-Widget::Widget(QString usrName, QWidget *parent)
-    : QWidget(parent), network_serve(usrName), usr_name(usrName)
+Widget::Widget(QString usrName, QWidget* parent)
+	: QWidget(parent)
+	, m_username(usrName)
     , ui(new Ui::Widget)
 {
-    ui->setupUi(this);
-    //qDebug() << usrName;
-    ui->userName_tl->setText(usrName);
+	ui->setupUi(this);
 
-    int net_ret = network_serve.initialize("127.0.0.1");
-    if(net_ret == -1){
-        QMessageBox::critical(this, "error", "failed to connect to server");
-        exit(0);
-    }
+	m_broadcaster = new MessageBroadcaster(this);
+	m_fileTransfer = new FileTransfer(this);
 
-    connect(&network_serve, &NetInit::messageToShow, this, &Widget::on_MessageReceived);
-}
+	setupConnections();
 
-QString Widget::usrNameGetter()
-{
-    return usr_name;
+	// ËøûÊé•Âà∞ÊúçÂä°Âô®
+    m_broadcaster->connectToServer("127.0.0.1", 2903);
+    qDebug() << "connectToServer\n";
+
+	// ÂèëÈÄÅÁôªÂΩïÂπøÊí≠
+	m_broadcaster->sendLoginBroadcast(m_username);
+    qDebug() << "broadcast login msg\n";
+
+	// ËÆæÁΩÆÁ™óÂè£Ê†áÈ¢ò
+    setWindowTitle(u8"ËÅäÂ§©ÂÆ§ - " + m_username);
 }
 
 Widget::~Widget()
 {
-    delete ui;
+	delete ui;
+}
+
+void Widget::setupConnections()
+{
+	// Ê∂àÊÅØÂπøÊí≠Âô®‰ø°Âè∑ËøûÊé•
+	connect(m_broadcaster, &MessageBroadcaster::messageReceived,
+		this, &Widget::handleMessageReceived);
+	connect(m_broadcaster, &MessageBroadcaster::userLoggedIn,
+		this, &Widget::handleUserLoggedIn);
+	connect(m_broadcaster, &MessageBroadcaster::userLoggedOut,
+		this, &Widget::handleUserLoggedOut);
+	connect(m_broadcaster, &MessageBroadcaster::fileBroadcastReceived,
+		this, &Widget::handleFileBroadcastReceived);
+	connect(m_broadcaster, &MessageBroadcaster::fileDownloadRequested,
+		this, &Widget::handleFileDownloadRequested);
+	connect(m_broadcaster, &MessageBroadcaster::connectionError,
+		this, &Widget::handleConnectionError);
+
+	// Êñá‰ª∂‰º†Ëæì‰ø°Âè∑ËøûÊé•
+	connect(m_fileTransfer, &FileTransfer::uploadProgress,
+		this, &Widget::handleUploadProgress);
+	connect(m_fileTransfer, &FileTransfer::downloadProgress,
+		this, &Widget::handleDownloadProgress);
+	connect(m_fileTransfer, &FileTransfer::uploadFinished,
+		this, &Widget::handleUploadFinished);
+	connect(m_fileTransfer, &FileTransfer::downloadFinished,
+		this, &Widget::handleDownloadFinished);
+	connect(m_fileTransfer, &FileTransfer::error,
+		this, &Widget::handleFileTransferError);
+}
+
+QString Widget::usrNameGetter()
+{
+	return m_username;
 }
 
 void Widget::on_close_pb_clicked()
 {
-    network_serve.sendMessage("ESC ");
-    exit(0);
-}
-
-void Widget::on_sendFile_pb_clicked()
-{
-    QString file_name = QFileDialog::getOpenFileName(this, u8"«Î—°‘Ò“™∑¢ÀÕµƒŒƒº˛", "D:\\");
-    if(!file_name.isEmpty()){
-        qDebug() << "Select file:" << file_name;
-    }
-
-    file_to_send.setFileName(file_name);
-    if(!file_to_send.open(QIODevice::ReadOnly)){
-        QMessageBox::warning(this, "error", "unable to open file");
-        return;
-    }
-
-    QString fileInfo = QString("FILE %1 %2")
-            .arg(file_to_send.fileName().section("/", -1))       //send filename only
-            .arg(file_to_send.size());
-    network_serve.sendMessage(fileInfo);
-
-    // Create custom widget
-    QWidget *itemWidget = new QWidget(this);
-    QVBoxLayout *layout = new QVBoxLayout(itemWidget);
-    QLabel *fileNameLabel = new QLabel(file_to_send.fileName().section("/", -1) + " : upload by your self!");
-    //QPushButton *downloadButton = new QPushButton(u8"œ¬‘ÿ");
-    QPushButton *openButton = new QPushButton(u8"¥Úø™");
-
-    // Add widgets to layout
-    layout->addWidget(fileNameLabel);
-    //layout->addWidget(downloadButton);
-    layout->addWidget(openButton);
-    layout->setSpacing(5);
-    layout->setContentsMargins(5, 5, 5, 5);
-
-    //create QListWidgetItem
-    QListWidgetItem *item = new QListWidgetItem(ui->fileList_lw);
-    item->setSizeHint(itemWidget->sizeHint());
-    ui->fileList_lw->addItem(item);
-    ui->fileList_lw->setItemWidget(item, itemWidget);
-
-    //connect buttons
-    //    connect(downloadButton, &QPushButton::clicked, this, [=]() {
-    //       QMessageBox::information(this, "Download", "Downloading file: " + file_to_send.fileName());
-    //       requestFileDownload(file_to_send.fileName());
-    //    });
-
-    connect(openButton, &QPushButton::clicked, this, [=]() {
-        //QDesktopServices::openUrl(QUrl::fromLocalFile(file_to_send.fileName()));
-        //TODO: if is not in local, qmessagebox. else open it
-        QDesktopServices::openUrl(QUrl::fromLocalFile(file_to_send.fileName()));
-    });
-
-    bytes_sent = 0;
+	close();
 }
 
 void Widget::on_send_pb_clicked()
 {
-    //get the user enter and send
-    msg_content_send = "MSG " + ui->send_te->toPlainText();
-    qDebug() << msg_content_send;
-    network_serve.sendMessage(msg_content_send);
+	QString message = ui->send_te->toPlainText();
+	if (message.isEmpty()) return;
 
-    QDateTime date_time = QDateTime::currentDateTime();
-    QString time_str = date_time.toString("yyyy-MM-dd hh:mm:ss");
-
-    QString msg_display = time_str + u8" Œ“:\n" + ui->send_te->toPlainText();
-    QListWidgetItem *item = new QListWidgetItem(msg_display);
-
-    //add send msg to chatwindow_lw right
-    item->setTextAlignment(Qt::AlignRight);         //right side
-
-    //    QPixmap pixmap(10, 10);
-    //    pixmap.fill(Qt::transparent);
-    //    QPainter painter(&pixmap);
-    //    painter.setPen(QPen(Qt::black, 2));
-    //    painter.drawLine(0, 0, pixmap.width(), 0);
-    //    item->setBackground(QBrush(pixmap));
-
-    ui->chatWindow_lw->addItem(item);               //add msg to list
-    ui->chatWindow_lw->scrollToBottom();            //scroll to bottom
-
-    ui->send_te->setText(NULL);
+	m_broadcaster->sendMessage(message);
+	ui->send_te->clear();
 }
 
-void Widget::on_MessageReceived(const QString &message)
+void Widget::on_sendFile_pb_clicked()
 {
-    qDebug() << "recived:" << message;
+    QString filePath = QFileDialog::getOpenFileName(this, u8"ÈÄâÊã©Ë¶ÅÂèëÈÄÅÁöÑÊñá‰ª∂");
+	if (filePath.isEmpty()) return;
 
-    QStringList messageParts = message.split(" ");
-    if(messageParts.isEmpty()){
-        QMessageBox::information(this, "notice!", "empty or invalid message format~!");
-        return;
-    }
+	QFileInfo fileInfo(filePath);
+	m_broadcaster->sendFileBroadcast(fileInfo.fileName(), fileInfo.size());
 
-    QString type = message.split(" ").at(0);
+    m_uploadProgress = new QProgressDialog(u8"Ê≠£Âú®‰∏ä‰º†Êñá‰ª∂...", u8"ÂèñÊ∂à", 0, 100, this);
+	m_uploadProgress->setWindowModality(Qt::WindowModal);
+	m_uploadProgress->setAutoClose(true);
+	m_uploadProgress->setAutoReset(true);
 
-    if(type == "MSG"){
-        handleNormalMsg(messageParts);
-    }else if(type == "ACP"){
-        sendFileData();
-    }else if(type == "ACPF"){
-        handleDownloadFile(messageParts);
-    }else if(type == "FILE"){
-        handleFileMsg(messageParts);
-    }else if(type == "LOG"){
-        handleLogMsg(messageParts);
-    }else {
-        qDebug() << "recive type:" << type;
-        QMessageBox::information(this, "notice!", "unknow message type!!");
-    }
-
-
-    /*QString dis_msg = message.split(" ").at(1);
-        QString dis_usr = message.split(" ").at(2);
-
-
-        QDateTime date_time = QDateTime::currentDateTime();
-        QString time_str = date_time.toString("yyyy-MM-dd hh:mm:ss");
-        QString msg_display = time_str + " " + dis_usr + ":\n" + dis_msg;
-
-        QListWidgetItem *item = new QListWidgetItem(msg_display);
-
-        if("LOG" != message.split(" ").at(0)){
-            item->setTextAlignment(Qt::AlignLeft);       //left side
-            ui->chatWindow_lw->addItem(item);            //add msg to list
-            ui->chatWindow_lw->scrollToBottom();         //scroll to bottom
-        }else{
-            item->setTextAlignment(Qt::AlignCenter);     //put notice in center
-            QFont font;
-            font.setFamily("ÀŒÃÂ");
-            font.setPointSize(9);
-            font.setStyle(QFont::StyleItalic);
-            item->setFont(font);
-            ui->chatWindow_lw->addItem(item);            //add msg to list
-            ui->chatWindow_lw->scrollToBottom();         //scroll to bottom
-        }*/
+	m_fileTransfer->uploadFile(filePath, "localhost", 8888);
 }
 
-void Widget::handleNormalMsg(const QStringList &messageParts)
+void Widget::handleMessageReceived(const QString& sender, const QString& message)
 {
-    if(messageParts.size() < 3){
-        qWarning() << "invalid chat message format";
-        return ;
-    }
-
-    QString sender = messageParts.at(2);
-    QString content = messageParts.mid(1, messageParts.size() -2).join(" ");
-
-    QDateTime date_time = QDateTime::currentDateTime();
-    QString time_str = date_time.toString("yyyy-MM-dd hh:mm:ss");
-
-    QString msg_display = time_str + " " + sender + ":\n" + content;
-    QListWidgetItem *item = new QListWidgetItem(msg_display);
-    item->setTextAlignment(Qt::AlignLeft);
-
-    ui->chatWindow_lw->addItem(item);
-    ui->chatWindow_lw->scrollToBottom();
+	displayMessage(sender, message);
 }
 
-void Widget::handleFileMsg(const QStringList &messageParts)
+void Widget::handleUserLoggedIn(const QString& username)
 {
-    if(messageParts.size() < 3){
-        qWarning() << "invalid chat message format";
-        return ;
-    }
-
-    QString file_name = messageParts.at(1);
-    QString file_size = messageParts.at(2);
-    QString from_usr = messageParts.at(3);
-
-    // Create custom widget
-    QWidget *itemWidget = new QWidget(this);
-    QVBoxLayout *layout = new QVBoxLayout(itemWidget);
-    QLabel *fileNameLabel = new QLabel(file_name + " : upload by " + from_usr + " size:" + file_size);
-    QPushButton *downloadButton = new QPushButton(u8"œ¬‘ÿ");
-    QPushButton *openButton = new QPushButton(u8"¥Úø™");
-
-    // Add widgets to layout
-    layout->addWidget(fileNameLabel);
-    layout->addWidget(downloadButton);
-    layout->addWidget(openButton);
-    layout->setSpacing(5);
-    layout->setContentsMargins(5, 5, 5, 5);
-
-    // Create QListWidgetItem
-    QListWidgetItem *item = new QListWidgetItem(ui->fileList_lw);
-    item->setSizeHint(itemWidget->sizeHint());
-    ui->fileList_lw->addItem(item);
-    ui->fileList_lw->setItemWidget(item, itemWidget);
-
-    //connect buttons
-    connect(downloadButton, &QPushButton::clicked, this, [=]() {
-        QMessageBox::information(this, "Download", "Downloading file: " + file_to_send.fileName());
-
-        QString rqst_msg = QString("RQST %1").arg(file_name);
-        network_serve.sendMessage(rqst_msg);
-    });
-
-    connect(openButton, &QPushButton::clicked, this, [=]() {
-        //QDesktopServices::openUrl(QUrl::fromLocalFile(file_to_send.fileName()));
-        //TODO: if is not in local, qmessagebox. else open it
-        QString local_path = QDir::currentPath() + "/appRecFile/" + file_name;
-        if(QFile::exists(local_path)){
-            QDesktopServices::openUrl(QUrl::fromLocalFile(local_path));
-        }else{
-            QMessageBox::warning(this, "error", "file not found locally, plz download first!");
-        }
-    });
+	if (username != m_username) {
+        QString msg = username;
+        msg += u8" Âä†ÂÖ•‰∫ÜËÅäÂ§©ÂÆ§";
+        displayMessage(u8"Á≥ªÁªü", msg);
+		updateUserList();
+	}
 }
 
-void Widget::handleLogMsg(const QStringList &messageParts)
+void Widget::handleUserLoggedOut(const QString& username)
 {
-    if(messageParts.size() < 2){
-        qWarning() << "invalid log message format";
-        return ;
-    }
-
-    QString log_content = messageParts.mid(1).join(" ");
-
-    QDateTime date_time = QDateTime::currentDateTime();
-    QString time_str = date_time.toString("yyyy-MM-dd hh:mm:ss");
-
-    QString log_display = time_str + " [System Log]:\n" + log_content;
-    QListWidgetItem *item = new QListWidgetItem(log_display);
-    item->setTextAlignment(Qt::AlignCenter);
-
-    QFont font;
-    font.setFamily("ÀŒÃÂ");
-    font.setPointSize(9);
-    font.setStyle(QFont::StyleItalic);
-    item->setFont(font);
-
-    ui->chatWindow_lw->addItem(item);
-    ui->chatWindow_lw->scrollToBottom();
+    QString msg = username;
+    msg += u8" Á¶ªÂºÄ‰∫ÜËÅäÂ§©ÂÆ§";
+    displayMessage(u8"Á≥ªÁªü", msg);
+	updateUserList();
 }
 
-void Widget::handleDownloadFile(const QStringList &messageParts)
+void Widget::handleFileBroadcastReceived(const QString& sender, const QString& filename, qint64 filesize)
 {
-    if (messageParts.size() < 3) {
-            qWarning() << "Invalid file message format";
-            return;
-        }
-
-        QString file_name = messageParts.at(1);
-        qint64 file_size = messageParts.at(2).toLongLong();
-
-        // ◊º±∏±£¥Êƒø¬º
-        QString save_path = QDir::currentPath() + "/appRecFile";
-        QDir dir(save_path);
-        if (!dir.exists() && !dir.mkpath(".")) {
-            qWarning() << "Failed to create directory:" << save_path;
-            return;
-        }
-
-        // ¥Úø™Œƒº˛
-        file_to_receive.setFileName(save_path + "/" + file_name);
-        if (!file_to_receive.open(QIODevice::WriteOnly)) {
-            qWarning() << "Cannot open file for writing:" << file_name;
-            return;
-        }
-
-        // ≥ı ºªØΩ” ’
-        bytes_received = 0;
-        total_file_size = file_size;
-
-        // Õ®÷™∑˛ŒÒ∆˜ø™ º¥´ ‰
-        network_serve.sendMessage("BGN");
-
-        // Ω” ’—≠ª∑
-        bool success = true;
-        while (bytes_received < total_file_size) {
-            QByteArray buffer = network_serve.receiveMessage();
-            if (buffer.isEmpty()) {
-                QThread::msleep(10);  // ∂Ã‘›–›√ﬂ±‹√‚CPU’º”√π˝∏ﬂ
-                continue;
-            }
-
-            qint64 written = file_to_receive.write(buffer);
-            if (written == -1) {
-                success = false;
-                qWarning() << "Write error:" << file_to_receive.errorString();
-                break;
-            }
-
-            bytes_received += written;
-        }
-
-        // «Â¿Ì∫ÕºÏ≤ÈΩ·π˚
-        file_to_receive.close();
-
-        if (!success || bytes_received < total_file_size) {
-            file_to_receive.remove();
-            qWarning() << "Download failed - received" << bytes_received << "of" << total_file_size;
-        }
+	displayFileMessage(sender, filename, filesize);
 }
 
-void Widget::sendFileData()
+void Widget::handleFileDownloadRequested(const QString& filename, const QString& sender)
 {
-    if(!file_to_send.isOpen()) return;
+    QString savePath = QFileDialog::getSaveFileName(this, u8"‰øùÂ≠òÊñá‰ª∂", filename);
+	if (savePath.isEmpty()) return;
 
-    QByteArray buffer = file_to_send.read(BUFFER_SIZE);
-    while(!buffer.isEmpty()){
-        network_serve.sendMessage(buffer);
-        bytes_sent += buffer.size();
-        buffer = file_to_send.read(BUFFER_SIZE);
-    }
+    m_downloadProgress = new QProgressDialog(u8"Ê≠£Âú®‰∏ãËΩΩÊñá‰ª∂...", u8"ÂèñÊ∂à", 0, 100, this);
+	m_downloadProgress->setWindowModality(Qt::WindowModal);
+	m_downloadProgress->setAutoClose(true);
+	m_downloadProgress->setAutoReset(true);
 
-    if(bytes_sent >= file_to_send.size()){
-        file_to_send.close();
-        QMessageBox::information(this, "success", "file finish send");
-    }
+	m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+}
+
+void Widget::handleConnectionError(const QString& error)
+{
+    QMessageBox::critical(this, u8"connect error!", error);
+}
+
+void Widget::handleUploadProgress(qint64 bytesSent, qint64 bytesTotal)
+{
+	if (m_uploadProgress) {
+		int percentage = (bytesSent * 100) / bytesTotal;
+		m_uploadProgress->setValue(percentage);
+	}
+}
+
+void Widget::handleDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)
+{
+	if (m_downloadProgress) {
+		int percentage = (bytesReceived * 100) / bytesTotal;
+		m_downloadProgress->setValue(percentage);
+	}
+}
+
+void Widget::handleUploadFinished()
+{
+	if (m_uploadProgress) {
+		m_uploadProgress->close();
+		m_uploadProgress = nullptr;
+	}
+}
+
+void Widget::handleDownloadFinished()
+{
+	if (m_downloadProgress) {
+		m_downloadProgress->close();
+		m_downloadProgress = nullptr;
+	}
+    QMessageBox::information(this, u8"download done", u8"completed downloadfile");
+}
+
+void Widget::handleFileTransferError(const QString& errorMessage)
+{
+    QMessageBox::critical(this, u8"file transfer error", errorMessage);
+}
+
+void Widget::updateUserList()
+{
+	// TODO: ÂÆûÁé∞Áî®Êà∑ÂàóË°®Êõ¥Êñ∞
+}
+
+void Widget::displayMessage(const QString& sender, const QString& message)
+{
+	QString displayText = QString("[%1] %2: %3")
+		.arg(QTime::currentTime().toString("hh:mm:ss"))
+		.arg(sender)
+		.arg(message);
+
+	ui->chatWindow_lw->addItem(displayText);
+	ui->chatWindow_lw->scrollToBottom();
+}
+
+void Widget::displayFileMessage(const QString& sender, const QString& filename, qint64 filesize)
+{
+	QString sizeStr;
+	if (filesize < 1024) {
+		sizeStr = QString::number(filesize) + u8" B";
+	}
+	else if (filesize < 1024 * 1024) {
+		sizeStr = QString::number(filesize / 1024.0, 'f', 2) + u8" KB";
+	}
+	else {
+		sizeStr = QString::number(filesize / (1024.0 * 1024.0), 'f', 2) + u8" MB";
+	}
+
+    QString timeStr = QTime::currentTime().toString("hh:mm:ss");
+    QString displayText = QString(u8"[%1] %2 ÂèëÈÄÅ‰∫ÜÊñá‰ª∂: %3 (%4)")
+		.arg(timeStr)
+		.arg(sender)
+		.arg(filename)
+		.arg(sizeStr);
+
+	QListWidgetItem* item = new QListWidgetItem(displayText);
+	item->setData(Qt::UserRole, QVariant::fromValue(QPair<QString, QString>(sender, filename)));
+	ui->chatWindow_lw->addItem(item);
+	ui->chatWindow_lw->scrollToBottom();
 }
 
 

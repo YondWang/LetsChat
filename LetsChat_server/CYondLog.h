@@ -30,6 +30,9 @@ const YondErrCode YOND_ERR_EPOLL_WAIT = 2008; // Error waiting for epoll events
 
 const YondErrCode YOND_ERR_THREAD_CREATE = 2009; // Error creating thread
 
+const YondErrCode YOND_ERR_RECV_PACKET = 2050;	//Error recv packet
+const YondErrCode YOND_ERR_PACKET_SUMCHECK = 2051;
+
 #endif // !_COMMON_ERROR_CODE_H_
 
 class CYondLog
@@ -135,6 +138,8 @@ public:
 			case YOND_ERR_EPOLL_CTL: return "Error adding or modifying epoll event";
 			case YOND_ERR_EPOLL_WAIT: return "Error waiting for epoll events";
 			case YOND_ERR_THREAD_CREATE: return "Error creating thread";
+			case YOND_ERR_RECV_PACKET: return "Error recv packet";
+			case YOND_ERR_PACKET_SUMCHECK: return "Error packet sum check";
 			default: return "Unknown error code";
 		}
 	}
