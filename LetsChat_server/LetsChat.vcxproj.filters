@@ -13,7 +13,12 @@
     <ClCompile Include="CYondHandleEvent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="CYondThreadPool.cpp" />
+    <ClCompile Include="CYondThreadPool.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="CYondPack.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Header Files">
@@ -42,6 +47,11 @@
     <ClInclude Include="CYondHandleEvent.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="CYondThreadPool.h" />
+    <ClInclude Include="CYondThreadPool.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="CYondPack.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
