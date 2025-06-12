@@ -46,6 +46,7 @@ public:
 		if (n <= 0) {
 			// 客户端断开连接
 			LOG_INFO("Client disconnected: " + m_clientFdToIp[events->data.fd]);
+			BroadCastToAll(events->data.fd, "", YDisCon);
 			close(events->data.fd);
 			m_clientFdToIp.erase(events->data.fd);
 			return 0;
@@ -103,16 +104,22 @@ private:
 				// TODO: 实现文件接收逻辑
 			}
 			break;
-
+		
 		default:
 			LOG_WARNING("Unknown message type: " + std::to_string(msg.m_sCmd));
 		}
 	}
 
 	void BroadCastToAll(int senderFd, const std::string& message , YondCmd cmd = YMsg) {
-		CYondPack broadcastMsg(cmd, message.c_str(), message.size());
-		const char* data = broadcastMsg.Data().c_str();
+		CYondPack broadcastMsg(cmd, senderFd, message.c_str(), message.size());
+		const char* data = broadcastMsg.Data().data();
 		size_t size = broadcastMsg.Size();
+
+		LOG_INFO("Broad raw data:");
+		for (size_t i = 0; i < size; i++) {
+			printf("%02X ", (unsigned char)data[i]);
+		}
+		printf("\r\n");
 
 		for (const auto& client : m_clientFdToIp) {
 			if (client.first != senderFd) {  // 不发送给发送者
@@ -121,7 +128,14 @@ private:
 				}
 			}
 		}
-		LOG_INFO("Broad msg:" + broadcastMsg.Data() + " | to all");
+	}
+
+	const char* StrToMsg(std::string* Str) {
+		return 0;
+	}
+
+	std::string* MsgToStr(CYondPack* Pack) {
+		return 0;
 	}
 
 	CYondThreadPool m_threadPool;

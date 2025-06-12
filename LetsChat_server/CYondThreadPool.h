@@ -91,7 +91,7 @@ public:
 		}
 		m_condition.notify_all();
 		
-		for (int i = 0; i < m_vThreads.size(); ++i) {
+		for (size_t i = 0; i < m_vThreads.size(); ++i) {
 			if (m_vThreads[i]->IsRunning()) {
 				m_vThreads[i]->Stop();
 			}

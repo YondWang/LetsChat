@@ -37,7 +37,9 @@ private:
         YConnect,
         YMsg,
         YFile,
-        YRecv
+        YRecv,
+
+        YNULL
     };
 
     // 写入大端序的16位整数

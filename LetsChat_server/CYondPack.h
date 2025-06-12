@@ -13,6 +13,7 @@ enum YondCmd
 	YMsg,
 	YFile,
 	YRecv,
+	YDisCon,
 
 	YNULL
 };
@@ -20,27 +21,29 @@ enum YondCmd
 class CYondPack
 {
 public:
-	CYondPack() :m_sHead(0), m_nLength(0), m_sCmd(YNULL), m_sUser(NULL), m_sSum(0) {}
-	CYondPack(YondCmd sCmd, const char* pData, size_t nSize) {
+	CYondPack() :m_sHead(0), m_nLength(0), m_sCmd(YNULL), m_sUser(0), m_sSum(0) {}
+	CYondPack(YondCmd sCmd, unsigned short userFd, const char* pData, size_t nSize) {
 		m_sHead = 0xFEFF;
 		m_nLength = nSize + 4;
 		m_sCmd = sCmd;
+		m_sUser = userFd;
 		if (nSize > 0) {
-			m_strData.reserve(nSize);
-			memcpy((void*)m_strData.c_str(), pData, nSize);
+			m_strData.resize(nSize);
+			memcpy(&m_strData[0], pData, nSize);
 		}
 		else {
 			m_strData.clear();
 		}
 		m_sSum = 0;
-		for (size_t i = 0; i < m_strData.size(); i++) {
-			m_sSum += (unsigned char)(m_strData[i] & 0xFF);
+		for (size_t i = 0; i < m_strData.size(); ++i) {
+			m_sSum += (unsigned char)(m_strData[i]);
 		}
 	}
 	CYondPack(const CYondPack& pack) {
 		m_sHead = pack.m_sHead;
 		m_nLength = pack.m_nLength;
 		m_sCmd = pack.m_sCmd;
+		m_sUser = pack.m_sUser;
 		m_strData = pack.m_strData;
 		m_sSum = pack.m_sSum;
 	}
@@ -92,12 +95,12 @@ public:
 
 		if (m_nLength > 4) {
 			m_strData.resize(m_nLength - 2 - 2);
-			memcpy((void*)m_strData.c_str(), pData + i, m_nLength - 4);
+			memcpy(&m_strData[0], pData + i, m_nLength - 4);
 			i += m_nLength - 4;
 		}
 		uint16_t sum16;
 		memcpy(&sum16, pData + i, sizeof(sum16));
-		m_sSum = htons(sum16);
+		m_sSum = ntohs(sum16);
 		unsigned short sum = 0;
 		for (size_t j = 0; j < m_strData.size(); j++) {
 			sum += (unsigned char)((m_strData[j]) & 0xFF);
@@ -116,29 +119,45 @@ public:
 			m_sHead = pack.m_sHead;
 			m_nLength = pack.m_nLength;
 			m_sCmd = pack.m_sCmd;
+			m_sUser = pack.m_sUser;
 			m_strData = pack.m_strData;
 			m_sSum = pack.m_sSum;
 		}
 		return *this;
 	}
 	size_t Size() {
-		return m_nLength + 6;
+		return m_nLength + 8;
 	}
 	std::string Data() {
-		m_strOut.resize(m_nLength + 6);
-		char* pData = (char*)m_strOut.c_str();
-		*(unsigned short*)pData = m_sHead; pData += 2;
-		*(unsigned long*)pData = m_nLength; pData += 4;
-		*(YondCmd*)pData = m_sCmd; pData += 2;
-		memcpy(pData, m_strData.c_str(), m_strData.size()); pData += m_strData.size();
-		*(unsigned short*)pData = m_sSum;
+		m_strOut.resize(m_nLength + 8);  // 总长度：头2 + 长度4 + 命令2 + 用户2 + 数据 + 校验和2
+		char* pData = &m_strOut[0];      // 获取可写指针
+
+		// 拼接数据
+		memcpy(pData, &m_sHead, 2); pData += 2;
+		memcpy(pData, &m_nLength, 4); pData += 4;
+		memcpy(pData, &m_sCmd, 2); pData += 2;
+		memcpy(pData, &m_sUser, 2); pData += 2;
+
+		if (!m_strData.empty()) {
+			memcpy(pData, m_strData.data(), m_strData.size());
+			pData += m_strData.size();
+		}
+
+		memcpy(pData, &m_sSum, 2);  // 最后写入校验和
+
+		LOG_INFO("Broad raw data:");
+		for (size_t i = 0; i < this->Size(); i++) {
+			printf("%02X ", (unsigned char)m_strOut[i]);
+		}
+		printf("\r\n");
+
 		return m_strOut;
 	}
 public:
 	unsigned short m_sHead;
 	size_t m_nLength;
 	YondCmd m_sCmd;
-	short m_sUser;
+	unsigned short m_sUser;
 	std::string m_strData;
 	unsigned short m_sSum;
 	std::string m_strOut;
