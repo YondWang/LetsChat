@@ -75,9 +75,13 @@ void Widget::on_close_pb_clicked()
 void Widget::on_send_pb_clicked()
 {
 	QString message = ui->send_te->toPlainText();
-	if (message.isEmpty()) return;
+    if (message.isEmpty()) {
+        QMessageBox::information(this, u8"notice!!", u8"you can`t send a NULL message!");
+        return;
+    }
 
 	m_broadcaster->sendMessage(message);
+    displayMessage("yourself", message);
 	ui->send_te->clear();
 }
 

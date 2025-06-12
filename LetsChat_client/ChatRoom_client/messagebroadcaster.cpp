@@ -222,7 +222,7 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
 void MessageBroadcaster::handleConnected()
 {
     m_isConnected = true;
-    emit connectionError("");
+    //emit connectionError("");
 }
 
 void MessageBroadcaster::handleDisconnected()
