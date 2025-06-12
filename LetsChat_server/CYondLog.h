@@ -31,7 +31,8 @@ const YondErrCode YOND_ERR_EPOLL_WAIT = 2008; // Error waiting for epoll events
 const YondErrCode YOND_ERR_THREAD_CREATE = 2009; // Error creating thread
 
 const YondErrCode YOND_ERR_RECV_PACKET = 2050;	//Error recv packet
-const YondErrCode YOND_ERR_PACKET_SUMCHECK = 2051;
+const YondErrCode YOND_ERR_PACKET_SUMCHECK = 2051;	//Error packet sumCheck
+const YondErrCode ERR_LOG_THREAD_TASK = 2052;	//Error thread task
 
 #endif // !_COMMON_ERROR_CODE_H_
 
