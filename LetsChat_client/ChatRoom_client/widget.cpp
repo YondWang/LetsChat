@@ -15,17 +15,19 @@ Widget::Widget(QString usrName, QWidget* parent)
 	m_fileTransfer = new FileTransfer(this);
 
 	setupConnections();
+    ui->connectStatus_lb->setText("connectStatus:false!!!");
 
 	// 连接到服务器
     m_broadcaster->connectToServer("127.0.0.1", 2903);
     qDebug() << "connectToServer\n";
-
+    ui->connectStatus_lb->setText("connectStatus:true!!!");
 	// 发送登录广播
 	m_broadcaster->sendLoginBroadcast(m_username);
     qDebug() << "broadcast login msg\n";
 
 	// 设置窗口标题
-    setWindowTitle(u8"聊天室 - " + m_username);
+    ui->userName_tl->setText(m_username);
+    setWindowTitle("聊天室_u:" + m_username);
 }
 
 Widget::~Widget()
@@ -101,17 +103,17 @@ void Widget::on_sendFile_pb_clicked()
 	m_fileTransfer->uploadFile(filePath, "localhost", 8888);
 }
 
-void Widget::handleMessageReceived(const QString& sender, const QString& message)
+void Widget::handleMessageReceived(const QString& username, const QString& message)
 {
-	displayMessage(sender, message);
+    displayMessage(username, message);
 }
 
 void Widget::handleUserLoggedIn(const QString& username)
 {
 	if (username != m_username) {
         QString msg = username;
-        msg += u8" 加入了聊天室";
-        displayMessage(u8"系统", msg);
+        msg += "_加入了聊天室";
+        displayMessage("系统", msg);
 		updateUserList();
 	}
 }
@@ -119,8 +121,8 @@ void Widget::handleUserLoggedIn(const QString& username)
 void Widget::handleUserLoggedOut(const QString& username)
 {
     QString msg = username;
-    msg += u8" 离开了聊天室";
-    displayMessage(u8"系统", msg);
+    msg += "_离开了聊天室";
+    displayMessage("系统", msg);
 	updateUserList();
 }
 
@@ -131,10 +133,10 @@ void Widget::handleFileBroadcastReceived(const QString& sender, const QString& f
 
 void Widget::handleFileDownloadRequested(const QString& filename, const QString& sender)
 {
-    QString savePath = QFileDialog::getSaveFileName(this, u8"保存文件", filename);
+    QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
 	if (savePath.isEmpty()) return;
 
-    m_downloadProgress = new QProgressDialog(u8"正在下载文件...", u8"取消", 0, 100, this);
+    m_downloadProgress = new QProgressDialog("正在下载文件...", "取消", 0, 100, this);
 	m_downloadProgress->setWindowModality(Qt::WindowModal);
 	m_downloadProgress->setAutoClose(true);
 	m_downloadProgress->setAutoReset(true);
@@ -144,7 +146,8 @@ void Widget::handleFileDownloadRequested(const QString& filename, const QString&
 
 void Widget::handleConnectionError(const QString& error)
 {
-    QMessageBox::critical(this, u8"connect error!", error);
+    QMessageBox::critical(this, "connect error!", error);
+    ui->connectStatus_lb->setText("connectStatus:false!!!");
 }
 
 void Widget::handleUploadProgress(qint64 bytesSent, qint64 bytesTotal)
@@ -177,12 +180,12 @@ void Widget::handleDownloadFinished()
 		m_downloadProgress->close();
 		m_downloadProgress = nullptr;
 	}
-    QMessageBox::information(this, u8"download done", u8"completed downloadfile");
+    QMessageBox::information(this, "download done", u8"completed downloadfile");
 }
 
 void Widget::handleFileTransferError(const QString& errorMessage)
 {
-    QMessageBox::critical(this, u8"file transfer error", errorMessage);
+    QMessageBox::critical(this, "file transfer error", errorMessage);
 }
 
 void Widget::updateUserList()
@@ -190,32 +193,32 @@ void Widget::updateUserList()
 	// TODO: 实现用户列表更新
 }
 
-void Widget::displayMessage(const QString& sender, const QString& message)
+void Widget::displayMessage(const QString& username, const QString& message)
 {
-	QString displayText = QString("[%1] %2: %3")
-		.arg(QTime::currentTime().toString("hh:mm:ss"))
-		.arg(sender)
-		.arg(message);
+    QString displayText = QString("[%1] %2: %3")
+        .arg(QTime::currentTime().toString("hh:mm:ss"))
+        .arg(username)
+        .arg(message);
 
-	ui->chatWindow_lw->addItem(displayText);
-	ui->chatWindow_lw->scrollToBottom();
+    ui->chatWindow_lw->addItem(displayText);
+    ui->chatWindow_lw->scrollToBottom();
 }
 
 void Widget::displayFileMessage(const QString& sender, const QString& filename, qint64 filesize)
 {
 	QString sizeStr;
 	if (filesize < 1024) {
-		sizeStr = QString::number(filesize) + u8" B";
+        sizeStr = QString::number(filesize) + " B";
 	}
 	else if (filesize < 1024 * 1024) {
-		sizeStr = QString::number(filesize / 1024.0, 'f', 2) + u8" KB";
+        sizeStr = QString::number(filesize / 1024.0, 'f', 2) + " KB";
 	}
 	else {
-		sizeStr = QString::number(filesize / (1024.0 * 1024.0), 'f', 2) + u8" MB";
+        sizeStr = QString::number(filesize / (1024.0 * 1024.0), 'f', 2) + " MB";
 	}
 
     QString timeStr = QTime::currentTime().toString("hh:mm:ss");
-    QString displayText = QString(u8"[%1] %2 发送了文件: %3 (%4)")
+    QString displayText = QString("[%1] %2 发送了文件: %3 (%4)")
 		.arg(timeStr)
 		.arg(sender)
 		.arg(filename)

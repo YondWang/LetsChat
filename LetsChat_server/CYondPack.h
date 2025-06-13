@@ -24,7 +24,7 @@ public:
 	CYondPack() :m_sHead(0), m_nLength(0), m_sCmd(YNULL), m_sUser(0), m_sSum(0) {}
 	CYondPack(YondCmd sCmd, unsigned short userFd, const char* pData, size_t nSize) {
 		m_sHead = 0xFEFF;
-		m_nLength = nSize + 4;
+		m_nLength = nSize + 4;  // 数据长度 + 命令(2) + 用户ID(2)
 		m_sCmd = sCmd;
 		m_sUser = userFd;
 		if (nSize > 0) {
@@ -39,19 +39,11 @@ public:
 			m_sSum += (unsigned char)(m_strData[i]);
 		}
 	}
-	CYondPack(const CYondPack& pack) {
-		m_sHead = pack.m_sHead;
-		m_nLength = pack.m_nLength;
-		m_sCmd = pack.m_sCmd;
-		m_sUser = pack.m_sUser;
-		m_strData = pack.m_strData;
-		m_sSum = pack.m_sSum;
-	}
-	CYondPack(const unsigned char* pData, size_t& nSize) {
+	CYondPack(const char* pData, size_t& nSize) {
 		// 打印接收到的原始数据
 		LOG_INFO("Received raw data:");
 		for (size_t i = 0; i < nSize; i++) {
-			printf("%02X ", pData[i]);
+			printf("%02X ", (unsigned char)pData[i]);
 		}
 		printf("\r\n");
 
@@ -74,44 +66,54 @@ public:
 			LOG_ERROR(YOND_ERR_RECV_PACKET, "Incomplete packet header!");
 			return;
 		}
+
+		// 读取长度
 		uint32_t len32;
 		memcpy(&len32, pData + i, sizeof(len32));
 		m_nLength = ntohl(len32);
 		i += 4;
+
 		if (m_nLength + i > nSize) {
 			nSize = 0;
-			LOG_ERROR(YOND_ERR_RECV_PACKET, "Failed to recv the packet!!");
+			LOG_ERROR(YOND_ERR_RECV_PACKET, "Failed to read packet body!");
 			return;
 		}
+
+		// 读取命令
 		uint16_t cmd16;
 		memcpy(&cmd16, pData + i, sizeof(cmd16));
 		m_sCmd = (YondCmd)ntohs(cmd16);
 		i += 2;
 
+		// 读取用户ID
 		uint16_t user16;
 		memcpy(&user16, pData + i, sizeof(user16));
 		m_sUser = ntohs(user16);
 		i += 2;
 
-		if (m_nLength > 4) {
-			m_strData.resize(m_nLength - 2 - 2);
-			memcpy(&m_strData[0], pData + i, m_nLength - 4);
-			i += m_nLength - 4;
+		// 读取数据
+		size_t dataLen = m_nLength - 4;  // 减去命令和用户ID的长度
+		if (dataLen > 0) {
+			m_strData.resize(dataLen);
+			memcpy(&m_strData[0], pData + i, dataLen);
+			i += dataLen;
 		}
-		uint16_t sum16;
-		memcpy(&sum16, pData + i, sizeof(sum16));
-		m_sSum = ntohs(sum16);
-		unsigned short sum = 0;
-		for (size_t j = 0; j < m_strData.size(); j++) {
-			sum += (unsigned char)((m_strData[j]) & 0xFF);
+		else {
+			m_strData.clear();
 		}
-		if (sum == m_sSum) {
-			nSize -= i;
-			LOG_INFO("Sum check is success:" + std::to_string(m_sSum));
-			return;
+
+		// 读取校验和
+		if (i + 2 <= nSize) {
+			uint16_t sum16;
+			memcpy(&sum16, pData + i, sizeof(sum16));
+			m_sSum = ntohs(sum16);
+			i += 2;
 		}
-		LOG_ERROR(YOND_ERR_PACKET_SUMCHECK, "Packet sum check error!!");
-		nSize = 0;
+		else {
+			m_sSum = 0;
+		}
+
+		nSize = i;
 	}
 	~CYondPack() {};
 	CYondPack& operator=(const CYondPack& pack) {
@@ -126,39 +128,59 @@ public:
 		return *this;
 	}
 	size_t Size() {
-		return m_nLength + 8;
+		// 总长度：头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据 + 校验和(2)
+		return 2 + 4 + 2 + 2 + m_strData.size() + 2;
 	}
-	std::string Data() {
-		m_strOut.resize(m_nLength + 8);  // 总长度：头2 + 长度4 + 命令2 + 用户2 + 数据 + 校验和2
-		char* pData = &m_strOut[0];      // 获取可写指针
-
-		// 拼接数据
-		memcpy(pData, &m_sHead, 2); pData += 2;
-		memcpy(pData, &m_nLength, 4); pData += 4;
-		memcpy(pData, &m_sCmd, 2); pData += 2;
-		memcpy(pData, &m_sUser, 2); pData += 2;
-
+	const std::string& Data() const {
+		static std::string data;
+		data.clear();
+		
+		// 消息头 (2字节)
+		uint16_t head = htons(m_sHead);
+		data.append((char*)&head, sizeof(head));
+		
+		// 消息长度 (4字节)
+		uint32_t len = htonl(m_nLength);
+		data.append((char*)&len, sizeof(len));
+		
+		// 命令 (2字节)
+		uint16_t cmd = htons((uint16_t)m_sCmd);
+		data.append((char*)&cmd, sizeof(cmd));
+		
+		// 用户ID (2字节)
+		uint16_t user = htons(m_sUser);
+		data.append((char*)&user, sizeof(user));
+		
+		// 数据
 		if (!m_strData.empty()) {
-			memcpy(pData, m_strData.data(), m_strData.size());
-			pData += m_strData.size();
+			data.append(m_strData);
 		}
-
-		memcpy(pData, &m_sSum, 2);  // 最后写入校验和
-
-		LOG_INFO("Broad raw data:");
-		for (size_t i = 0; i < this->Size(); i++) {
-			printf("%02X ", (unsigned char)m_strOut[i]);
-		}
-		printf("\r\n");
-
-		return m_strOut;
+		
+		// 校验和 (2字节)
+		uint16_t sum = htons(m_sSum);
+		data.append((char*)&sum, sizeof(sum));
+		
+		return data;
 	}
+
+	// 添加一个辅助方法来打印消息内容
+	void PrintMessage() {
+		std::string hexData;
+		const char* data = Data().data();
+		size_t size = Size();
+		for (size_t i = 0; i < size; i++) {
+			char hex[4];
+			snprintf(hex, sizeof(hex), "%02X ", (unsigned char)data[i]);
+			hexData += hex;
+		}
+		LOG_INFO("Message content: " + hexData);
+	}
+
 public:
 	unsigned short m_sHead;
-	size_t m_nLength;
+	size_t m_nLength;  // 包含命令和用户ID的长度
 	YondCmd m_sCmd;
 	unsigned short m_sUser;
 	std::string m_strData;
 	unsigned short m_sSum;
-	std::string m_strOut;
 };

@@ -46,7 +46,7 @@ public:
 		if (n <= 0) {
 			// 客户端断开连接
 			LOG_INFO("Client disconnected: " + m_clientFdToIp[events->data.fd]);
-			BroadCastToAll(events->data.fd, "", YDisCon);
+			BroadCastToAll(events->data.fd, m_clientFdToIp[events->data.fd], YDisCon);
 			close(events->data.fd);
 			m_clientFdToIp.erase(events->data.fd);
 			return 0;
@@ -64,7 +64,7 @@ private:
 	void ProcessMessage(int clientFd, const std::string& data) {
 		CYondPack msg;
 		size_t size = data.size();
-		const unsigned char* pData = (const unsigned char*)(data.c_str());
+		const char* pData = (const char*)(data.c_str());
 		msg = CYondPack(pData, size);
 
 		if (size == 0) {
@@ -78,6 +78,7 @@ private:
 			// 记录新客户端
 			m_clientFdToIp[clientFd] = msg.m_strData;
 			LOG_INFO("Client " + m_clientFdToIp[clientFd] + " connected" + " broad login msg!");
+			// 广播新用户加入的消息
 			BroadCastToAll(clientFd, msg.m_strData, YConnect);
 			break;
 
@@ -111,18 +112,28 @@ private:
 	}
 
 	void BroadCastToAll(int senderFd, const std::string& message , YondCmd cmd = YMsg) {
-		CYondPack broadcastMsg(cmd, senderFd, message.c_str(), message.size());
+		// 使用senderFd作为用户ID，但确保它在16位范围内
+		unsigned short userId = (unsigned short)(senderFd & 0xFFFF);
+		CYondPack broadcastMsg(cmd, userId, message.c_str(), message.size());
+		
+		// 打印消息内容
+		broadcastMsg.PrintMessage();
+
 		const char* data = broadcastMsg.Data().data();
 		size_t size = broadcastMsg.Size();
 
-		LOG_INFO("Broad raw data:");
-		for (size_t i = 0; i < size; i++) {
-			printf("%02X ", (unsigned char)data[i]);
-		}
-		printf("\r\n");
-
 		for (const auto& client : m_clientFdToIp) {
 			if (client.first != senderFd) {  // 不发送给发送者
+				if (send(client.first, data, size, 0) < 0) {
+					LOG_ERROR(YOND_ERR_SOCKET_SEND, "Failed to broadcast message to client " + client.second);
+				}
+			}
+		}
+	}
+
+	void BroadToAllDrc(const char* data, size_t size, int senderFd) {
+		for (const auto& client : m_clientFdToIp) {
+			if (client.first != senderFd) {
 				if (send(client.first, data, size, 0) < 0) {
 					LOG_ERROR(YOND_ERR_SOCKET_SEND, "Failed to broadcast message to client " + client.second);
 				}
@@ -139,6 +150,6 @@ private:
 	}
 
 	CYondThreadPool m_threadPool;
-	std::map<int, std::string> m_clientFdToIp; // 客户端fd到IP地址的映射
+	std::map<int, std::string> m_clientFdToIp;  // 客户端fd到IP地址的映射
 };
 

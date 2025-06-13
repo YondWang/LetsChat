@@ -36,7 +36,7 @@ private slots:
 
     void on_send_pb_clicked();
     
-    void handleMessageReceived(const QString &sender, const QString &message);
+    void handleMessageReceived(const QString &username, const QString &message);
     void handleUserLoggedIn(const QString &username);
     void handleUserLoggedOut(const QString &username);
     void handleFileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);

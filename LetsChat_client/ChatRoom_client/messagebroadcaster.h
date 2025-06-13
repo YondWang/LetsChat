@@ -1,9 +1,11 @@
-#ifndef MESSAGEBROADCASTER_H
-#define MESSAGEBROADCASTER_H
+#pragma once
 
 #include <QObject>
 #include <QTcpSocket>
 #include <QByteArray>
+#include <QMap>
+#include <QString>
+#include <map>
 
 class MessageBroadcaster : public QObject
 {
@@ -19,7 +21,7 @@ public:
     void requestFileDownload(const QString &filename, const QString &sender);
 
 signals:
-    void messageReceived(const QString &sender, const QString &message);
+    void messageReceived(const QString &username, const QString &message);
     void userLoggedIn(const QString &username);
     void userLoggedOut(const QString &username);
     void fileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
@@ -34,13 +36,14 @@ private slots:
 
 private:
     enum MessageType {
-        YConnect,
-        YMsg,
-        YFile,
-        YRecv,
-
-        YNULL
+        YConnect = 0,
+        YMsg = 1,
+        YFile = 2,
+        YRecv = 3,
+        YDisCon = 4
     };
+
+    static const quint16 MESSAGE_HEADER = 0xFEFF;
 
     // 写入大端序的16位整数
     static void writeUint16(char*& pData, quint16 value) {
@@ -77,8 +80,10 @@ private:
     void parseMessage(const QByteArray &data);
 
     QTcpSocket *m_socket;
-    bool m_isConnected;
     QByteArray m_buffer;
-};
+    bool m_isConnected;
+    int m_currentUserId;
+    QString m_username;
 
-#endif // MESSAGEBROADCASTER_H 
+    std::map<int, QString> m_userIdToName;  // 用户ID到用户名的映射
+}; 
