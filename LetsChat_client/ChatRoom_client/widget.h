@@ -12,6 +12,10 @@
 #include <QFile>
 #include <QProgressDialog>
 #include <QTime>
+#include <QMap>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QFileInfo>
 
 #define BUFFER_SIZE 4096
 
@@ -41,6 +45,7 @@ private slots:
     void handleUserLoggedOut(const QString &username);
     void handleFileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
     void handleFileDownloadRequested(const QString &filename, const QString &sender);
+    void handleDisconnected(const QString &username);
     void handleConnectionError(const QString &error);
     
     void handleUploadProgress(qint64 bytesSent, qint64 bytesTotal);
@@ -48,6 +53,15 @@ private slots:
     void handleUploadFinished();
     void handleDownloadFinished();
     void handleFileTransferError(const QString &errorMessage);
+    void onFileDownloadClicked();
+    void onFileOpenClicked();
+    //void on_send_btn_clicked();
+    //void on_file_btn_clicked();
+    void displayMessage(const QString& sender, const QString& message);
+    void displayFileMessage(const QString& sender, const QString& filename, qint64 filesize);
+    //void onFileTransferProgress(int progress);
+    //void onFileTransferComplete();
+    //void onFileTransferError(const QString& error);
 
 private:
     MessageBroadcaster *m_broadcaster;
@@ -58,9 +72,9 @@ private:
     QProgressDialog *m_uploadProgress;
     QProgressDialog *m_downloadProgress;
     
+    QMap<QString, QString> m_downloadedFiles; // 文件名->本地保存路径
+    
     void setupConnections();
     void updateUserList();
-    void displayMessage(const QString &sender, const QString &message);
-    void displayFileMessage(const QString &sender, const QString &filename, qint64 filesize);
 };
 #endif // WIDGET_H

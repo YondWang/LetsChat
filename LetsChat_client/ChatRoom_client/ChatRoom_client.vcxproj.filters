@@ -47,19 +47,19 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="cprocess.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="cthread.cpp">
+    <ClCompile Include="cclientpacket.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="dialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="filetransfer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="netinit.cpp">
+    <ClCompile Include="messagebroadcaster.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="widget.cpp">
@@ -67,16 +67,16 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="cprocess.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="cthread.h">
+    <ClInclude Include="cclientpacket.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="dialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="netinit.h">
+    <QtMoc Include="filetransfer.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="messagebroadcaster.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="widget.h">

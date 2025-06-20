@@ -3,6 +3,7 @@
 #include "CChatServer.h"
 #include "CYondLog.h"
 #include "CYondThreadPool.h"
+#include <filesystem>
 
 int main()
 {
@@ -10,6 +11,15 @@ int main()
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)) != NULL) {
         printf("Current working directory: %s\n", cwd);
+    }
+
+    // 创建接收文件的目录
+    try {
+        std::filesystem::create_directories("received_files");
+        LOG_INFO("Created received_files directory");
+    } catch (const std::exception& e) {
+        LOG_ERROR(YOND_ERR_OK, "Failed to create received_files directory: " + std::string(e.what()));
+        return 1;
     }
 
     // 初始化日志系统

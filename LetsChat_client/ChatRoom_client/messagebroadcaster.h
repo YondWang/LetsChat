@@ -9,14 +9,27 @@
 
 class MessageBroadcaster : public QObject
 {
+public:
+    enum MessageType {
+        YConnect = 0,
+        YMsg = 1,
+        YFile = 2,
+        YRecv = 3,
+        YDisCon = 4,
+        YFileStart = 5,
+        YFileData = 6,
+        YFileEnd = 7,
+        YFileAck = 8,
+        YRetrans = 9,
+        YUserList = 10
+    };
     Q_OBJECT
 public:
     explicit MessageBroadcaster(QObject *parent = nullptr);
     ~MessageBroadcaster();
 
     void connectToServer(const QString &host, quint16 port);
-    void sendMessage(const QString &message);
-    void sendLoginBroadcast(const QString &username);
+    void sendDataByPackCut(const QString &message, MessageType messageType = YMsg);
     void sendFileBroadcast(const QString &filename, qint64 filesize);
     void requestFileDownload(const QString &filename, const QString &sender);
 
@@ -26,58 +39,26 @@ signals:
     void userLoggedOut(const QString &username);
     void fileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
     void fileDownloadRequested(const QString &filename, const QString &sender);
+    void disconnection(const QString &username);
     void connectionError(const QString &error);
+    void retransmissionRequested(quint16 startSeq, quint16 endSeq);
 
 private slots:
     void handleReadyRead();
     void handleConnected();
     void handleDisconnected();
     void handleError(QAbstractSocket::SocketError socketError);
+    void handleRetransmissionRequest(const QByteArray &data);
 
 private:
-    enum MessageType {
-        YConnect = 0,
-        YMsg = 1,
-        YFile = 2,
-        YRecv = 3,
-        YDisCon = 4
-    };
-
     static const quint16 MESSAGE_HEADER = 0xFEFF;
 
-    // 写入大端序的16位整数
-    static void writeUint16(char*& pData, quint16 value) {
-        pData[0] = (value >> 8) & 0xFF;
-        pData[1] = value & 0xFF;
-        pData += 2;
-    }
-
-    // 写入大端序的32位整数
-    static void writeUint32(char*& pData, quint32 value) {
-        pData[0] = (value >> 24) & 0xFF;
-        pData[1] = (value >> 16) & 0xFF;
-        pData[2] = (value >> 8) & 0xFF;
-        pData[3] = value & 0xFF;
-        pData += 4;
-    }
-
-    // 读取大端序的16位整数
-    static quint16 readUint16(const QByteArray& data, int& pos) {
-        quint16 value = ((quint8)data[pos] << 8) | (quint8)data[pos + 1];
-        pos += 2;
-        return value;
-    }
-
-    // 读取大端序的32位整数
-    static quint32 readUint32(const QByteArray& data, int& pos) {
-        quint32 value = ((quint8)data[pos] << 24) | ((quint8)data[pos + 1] << 16) |
-                       ((quint8)data[pos + 2] << 8) | (quint8)data[pos + 3];
-        pos += 4;
-        return value;
-    }
-
-    QByteArray createMessagePacket(MessageType type, const QString &data);
+    QList<QByteArray> createMessagePacket(MessageType type, const QString &data);
     void parseMessage(const QByteArray &data);
+    void retransmitMessages(quint16 startSeq, quint16 endSeq);
+
+    static const int MAX_PACKET_SIZE = 2048;
+    qint16 m_nSequence;
 
     QTcpSocket *m_socket;
     QByteArray m_buffer;
@@ -86,4 +67,12 @@ private:
     QString m_username;
 
     std::map<int, QString> m_userIdToName;  // 用户ID到用户名的映射
+
+    struct CachedMessage {
+        MessageType type;
+        QString data;
+        QByteArray rawData;
+    };
+    QMap<quint16, CachedMessage> m_messageCache;
+    static const int MAX_CACHE_SIZE = 1000;
 }; 

@@ -3,6 +3,10 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDesktopServices>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
 
 Widget::Widget(QString usrName, QWidget* parent)
 	: QWidget(parent)
@@ -11,7 +15,7 @@ Widget::Widget(QString usrName, QWidget* parent)
 {
 	ui->setupUi(this);
 
-	m_broadcaster = new MessageBroadcaster(this);
+    m_broadcaster = new MessageBroadcaster(this);
 	m_fileTransfer = new FileTransfer(this);
 
 	setupConnections();
@@ -22,7 +26,7 @@ Widget::Widget(QString usrName, QWidget* parent)
     qDebug() << "connectToServer\n";
     ui->connectStatus_lb->setText("connectStatus:true!!!");
 	// 发送登录广播
-	m_broadcaster->sendLoginBroadcast(m_username);
+    m_broadcaster->sendDataByPackCut(m_username, MessageBroadcaster::YConnect);
     qDebug() << "broadcast login msg\n";
 
 	// 设置窗口标题
@@ -48,6 +52,8 @@ void Widget::setupConnections()
 		this, &Widget::handleFileBroadcastReceived);
 	connect(m_broadcaster, &MessageBroadcaster::fileDownloadRequested,
 		this, &Widget::handleFileDownloadRequested);
+    connect(m_broadcaster, &MessageBroadcaster::disconnection,
+        this, &Widget::handleDisconnected);
 	connect(m_broadcaster, &MessageBroadcaster::connectionError,
 		this, &Widget::handleConnectionError);
 
@@ -78,24 +84,23 @@ void Widget::on_send_pb_clicked()
 {
 	QString message = ui->send_te->toPlainText();
     if (message.isEmpty()) {
-        QMessageBox::information(this, u8"notice!!", u8"you can`t send a NULL message!");
+        QMessageBox::information(this, "notice!!", "you can`t send a NULL message!");
         return;
     }
-
-	m_broadcaster->sendMessage(message);
+    m_broadcaster->sendDataByPackCut(message);
     displayMessage("yourself", message);
-	ui->send_te->clear();
+    ui->send_te->clear();
 }
 
 void Widget::on_sendFile_pb_clicked()
 {
-    QString filePath = QFileDialog::getOpenFileName(this, u8"选择要发送的文件");
+    QString filePath = QFileDialog::getOpenFileName(this, "选择要发送的文件");
 	if (filePath.isEmpty()) return;
 
 	QFileInfo fileInfo(filePath);
 	m_broadcaster->sendFileBroadcast(fileInfo.fileName(), fileInfo.size());
 
-    m_uploadProgress = new QProgressDialog(u8"正在上传文件...", u8"取消", 0, 100, this);
+    m_uploadProgress = new QProgressDialog("正在上传文件...", "取消", 0, 100, this);
 	m_uploadProgress->setWindowModality(Qt::WindowModal);
 	m_uploadProgress->setAutoClose(true);
 	m_uploadProgress->setAutoReset(true);
@@ -128,7 +133,7 @@ void Widget::handleUserLoggedOut(const QString& username)
 
 void Widget::handleFileBroadcastReceived(const QString& sender, const QString& filename, qint64 filesize)
 {
-	displayFileMessage(sender, filename, filesize);
+    displayFileMessage(sender, filename, filesize);
 }
 
 void Widget::handleFileDownloadRequested(const QString& filename, const QString& sender)
@@ -141,7 +146,12 @@ void Widget::handleFileDownloadRequested(const QString& filename, const QString&
 	m_downloadProgress->setAutoClose(true);
 	m_downloadProgress->setAutoReset(true);
 
-	m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+    m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+}
+
+void Widget::handleDisconnected(const QString &username)
+{
+    QMessageBox::information(this, "disconnected!", username + " is disconnected from server!");
 }
 
 void Widget::handleConnectionError(const QString& error)
@@ -193,41 +203,150 @@ void Widget::updateUserList()
 	// TODO: 实现用户列表更新
 }
 
-void Widget::displayMessage(const QString& username, const QString& message)
+void Widget::displayMessage(const QString& sender, const QString& message)
 {
     QString displayText = QString("[%1] %2: %3")
         .arg(QTime::currentTime().toString("hh:mm:ss"))
-        .arg(username)
+        .arg(sender)
         .arg(message);
-
     ui->chatWindow_lw->addItem(displayText);
     ui->chatWindow_lw->scrollToBottom();
 }
 
 void Widget::displayFileMessage(const QString& sender, const QString& filename, qint64 filesize)
 {
-	QString sizeStr;
-	if (filesize < 1024) {
+    // 创建文件消息容器
+    QWidget* fileContainer = new QWidget(this);
+    QHBoxLayout* fileLayout = new QHBoxLayout(fileContainer);
+    fileLayout->setContentsMargins(10, 5, 10, 5);
+    fileLayout->setSpacing(10);
+
+    // 文件图标
+    QLabel* fileIcon = new QLabel(this);
+    QPixmap iconPixmap(":/icons/file.png");
+    fileIcon->setPixmap(iconPixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    fileLayout->addWidget(fileIcon);
+
+    // 信息区
+    QWidget* infoContainer = new QWidget(this);
+    QVBoxLayout* infoLayout = new QVBoxLayout(infoContainer);
+    infoLayout->setContentsMargins(0, 0, 0, 0);
+    infoLayout->setSpacing(5);
+
+    // 发送者
+    QLabel* senderLabel = new QLabel(this);
+    senderLabel->setText("发送者: " + sender);
+    senderLabel->setStyleSheet("color: #666; font-size: 12px;");
+    infoLayout->addWidget(senderLabel);
+
+    // 文件名
+    QLabel* fileNameLabel = new QLabel(this);
+    fileNameLabel->setText(filename);
+    fileNameLabel->setStyleSheet("color: #333; font-weight: bold;");
+    infoLayout->addWidget(fileNameLabel);
+
+    // 文件大小
+    QLabel* fileSizeLabel = new QLabel(this);
+    QString sizeStr;
+    if (filesize < 1024)
         sizeStr = QString::number(filesize) + " B";
-	}
-	else if (filesize < 1024 * 1024) {
+    else if (filesize < 1024 * 1024)
         sizeStr = QString::number(filesize / 1024.0, 'f', 2) + " KB";
-	}
-	else {
+    else
         sizeStr = QString::number(filesize / (1024.0 * 1024.0), 'f', 2) + " MB";
-	}
+    fileSizeLabel->setText("大小: " + sizeStr);
+    fileSizeLabel->setStyleSheet("color: #666; font-size: 12px;");
+    infoLayout->addWidget(fileSizeLabel);
 
-    QString timeStr = QTime::currentTime().toString("hh:mm:ss");
-    QString displayText = QString("[%1] %2 发送了文件: %3 (%4)")
-		.arg(timeStr)
-		.arg(sender)
-		.arg(filename)
-		.arg(sizeStr);
+    fileLayout->addWidget(infoContainer);
 
-	QListWidgetItem* item = new QListWidgetItem(displayText);
-	item->setData(Qt::UserRole, QVariant::fromValue(QPair<QString, QString>(sender, filename)));
-	ui->chatWindow_lw->addItem(item);
-	ui->chatWindow_lw->scrollToBottom();
+    // 下载按钮
+    QPushButton* downloadBtn = new QPushButton(this);
+    downloadBtn->setText("下载");
+    downloadBtn->setStyleSheet(
+        "QPushButton {"
+        "    background-color: #4CAF50;"
+        "    color: white;"
+        "    border: none;"
+        "    padding: 5px 15px;"
+        "    border-radius: 3px;"
+        "}"
+        "QPushButton:hover {"
+        "    background-color: #45a049;"
+        "}"
+        "QPushButton:pressed {"
+        "    background-color: #3d8b40;"
+        "}"
+    );
+    fileLayout->addWidget(downloadBtn);
+
+    fileContainer->setStyleSheet(
+        "QWidget {"
+        "    background-color: #f5f5f5;"
+        "    border-radius: 5px;"
+        "    border: 1px solid #ddd;"
+        "}"
+    );
+
+    // 添加到聊天框
+    QListWidgetItem* item = new QListWidgetItem();
+    item->setSizeHint(fileContainer->sizeHint());
+    ui->chatWindow_lw->addItem(item);
+    ui->chatWindow_lw->setItemWidget(item, fileContainer);
+    ui->chatWindow_lw->scrollToBottom();
+
+    // 下载按钮事件（此处仅作演示，实际下载逻辑需完善）
+    connect(downloadBtn, &QPushButton::clicked, [filename]() {
+        QMessageBox::information(nullptr, "下载", "下载功能待实现: " + filename);
+    });
+}
+
+void Widget::onFileDownloadClicked()
+{
+    // 找到按钮对应的文件名
+    QPushButton* btn = qobject_cast<QPushButton*>(sender());
+    if (!btn) return;
+    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
+        QListWidgetItem* item = ui->fileList_lw->item(i);
+        QWidget* widget = ui->fileList_lw->itemWidget(item);
+        if (widget && widget->findChild<QPushButton*>("下载") == btn) {
+            QString filename = item->data(Qt::UserRole).toString();
+            // 选择保存路径
+            QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
+            if (savePath.isEmpty()) return;
+            m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+            m_downloadedFiles[filename] = savePath;
+            break;
+        }
+    }
+}
+
+void Widget::onFileOpenClicked()
+{
+    QPushButton* btn = qobject_cast<QPushButton*>(sender());
+    if (!btn) return;
+    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
+        QListWidgetItem* item = ui->fileList_lw->item(i);
+        QWidget* widget = ui->fileList_lw->itemWidget(item);
+        if (widget && widget->findChild<QPushButton*>("打开") == btn) {
+            QString filename = item->data(Qt::UserRole).toString();
+            QString localPath = m_downloadedFiles.value(filename);
+            if (!localPath.isEmpty() && QFileInfo::exists(localPath)) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(localPath));
+            } else {
+                // 未下载则先下载再打开
+                QString savePath = QFileDialog::getSaveFileName(this, "保存并打开文件", filename);
+                if (savePath.isEmpty()) return;
+                m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+                m_downloadedFiles[filename] = savePath;
+                // 下载完成后自动打开
+                connect(m_fileTransfer, &FileTransfer::downloadFinished, [savePath]() {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(savePath));
+                });
+            }
+            break;
+        }
+    }
 }
 
 

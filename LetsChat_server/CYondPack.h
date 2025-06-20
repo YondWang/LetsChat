@@ -14,7 +14,12 @@ enum YondCmd
 	YFile,
 	YRecv,
 	YDisCon,
-
+	YFileStart,    // 文件传输开始
+	YFileData,     // 文件数据包
+	YFileEnd,      // 文件传输结束
+	YFileAck,      // 文件传输确认
+	YRetrans,      // 请求重传
+	YUserList = 10, // 新增：用户列表
 	YNULL
 };
 
@@ -35,7 +40,8 @@ public:
 			m_strData.clear();
 		}
 		m_sSum = 0;
-		for (size_t i = 0; i < m_strData.size(); ++i) {
+		// 只对数据内容做校验和，跳过前2字节序列号
+		for (size_t i = 2; i < m_strData.size(); ++i) {
 			m_sSum += (unsigned char)(m_strData[i]);
 		}
 	}
@@ -113,7 +119,15 @@ public:
 			m_sSum = 0;
 		}
 
-		nSize = i;
+		uint16_t tsum = 0;
+		for (size_t i = 0; i < m_strData.size(); i++) {
+			tsum += (unsigned char)(m_strData[i] & 0xFF);
+		}
+		if (tsum == m_sSum) {
+			nSize = i;
+			return;
+		}
+		LOG_ERROR(YOND_ERR_PACKET_SUMCHECK, "Sumcheck error!!!");
 	}
 	~CYondPack() {};
 	CYondPack& operator=(const CYondPack& pack) {
@@ -127,7 +141,7 @@ public:
 		}
 		return *this;
 	}
-	size_t Size() {
+	size_t Size() const{
 		// 总长度：头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据 + 校验和(2)
 		return 2 + 4 + 2 + 2 + m_strData.size() + 2;
 	}

@@ -50,50 +50,107 @@ void writeUint32(char*& pData, quint32 value) {
     pData += 4;
 }
 
-QByteArray MessageBroadcaster::createMessagePacket(MessageType type, const QString &data)
+void MessageBroadcaster::handleRetransmissionRequest(const QByteArray &data) {
+    QString request = QString::fromUtf8(data);
+    QStringList parts = request.split(",");
+    if (parts.size() != 2) {
+        qDebug() << "Invalid retransmission request format";
+        return;
+    }
+
+    bool ok1, ok2;
+    quint16 startSeq = parts[0].toUShort(&ok1);
+    quint16 endSeq = parts[1].toUShort(&ok2);
+    
+    if (!ok1 || !ok2) {
+        qDebug() << "Invalid sequence numbers in retransmission request";
+        return;
+    }
+
+    retransmitMessages(startSeq, endSeq);
+}
+
+void MessageBroadcaster::retransmitMessages(quint16 startSeq, quint16 endSeq) {
+    for (quint16 seq = startSeq; seq <= endSeq; ++seq) {
+        if (m_messageCache.contains(seq)) {
+            const CachedMessage &msg = m_messageCache[seq];
+            m_socket->write(msg.rawData);
+            m_socket->flush();
+            qDebug() << "Retransmitted message with sequence" << seq;
+        }
+    }
+}
+
+QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, const QString &data)
 {
     // 确保使用 UTF-8 编码
     QByteArray dataBytes = data.toUtf8();
-    quint32 length = dataBytes.size() + 4; // 4 = 命令类型(2字节) + 用户ID(2字节)
 
-    // 预分配空间
-    QByteArray packet;
-    packet.resize(2 + 4 + 2 + 2 + dataBytes.size() + 2); // 头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据 + 校验和(2)
-    char* pData = packet.data();
+    QList<QByteArray> packets;
+    int totalPackets = (dataBytes.size() + MAX_PACKET_SIZE - 1) / MAX_PACKET_SIZE;
 
-    // 写入消息头（使用网络字节序）
-    quint16 header = htons(MESSAGE_HEADER);
-    memcpy(pData, &header, 2);
-    pData += 2;
+    for(int i = 0; i < totalPackets; i++) {
+        int currentSize = qMin(MAX_PACKET_SIZE, dataBytes.size() - i * MAX_PACKET_SIZE);
+        QByteArray currentData = dataBytes.mid(i * MAX_PACKET_SIZE, currentSize);
 
-    // 写入长度（使用网络字节序）
-    quint32 netLength = htonl(length);
-    memcpy(pData, &netLength, 4);
-    pData += 4;
+        // 添加序列号到数据前面
+        QByteArray sequenceData;
+        sequenceData.resize(2);
+        quint16 netSequence = htons(m_nSequence + i);
+        memcpy(sequenceData.data(), &netSequence, 2);
+        currentData.prepend(sequenceData);
 
-    // 写入命令（使用网络字节序）
-    quint16 netType = htons(type);
-    memcpy(pData, &netType, 2);
-    pData += 2;
+        qint32 length = currentData.size() + 4;  // 数据长度(包含序列号) + 命令(2) + 用户ID(2)
+        
+        // 预分配空间
+        QByteArray packet;
+        packet.resize(2 + 4 + 2 + 2 + currentData.size() + 2); // 头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据(含序列号) + 校验和(2)
+        char* pData = packet.data();
 
-    // 写入用户ID（使用网络字节序）
-    quint16 userId = htons(m_currentUserId);  // 使用当前用户的ID
-    memcpy(pData, &userId, 2);
-    pData += 2;
+        // 写入消息头（使用网络字节序）
+        quint16 header = htons(MESSAGE_HEADER);
+        memcpy(pData, &header, 2);
+        pData += 2;
 
-    // 写入数据
-    memcpy(pData, dataBytes.constData(), dataBytes.size());
-    pData += dataBytes.size();
+        // 写入长度
+        quint32 netLength = htonl(length);
+        memcpy(pData, &netLength, 4);
+        pData += 4;
 
-    // 计算并写入校验和（使用网络字节序）
-    quint16 sum = 0;
-    for (int i = 0; i < dataBytes.size(); i++) {
-        sum += (quint8)dataBytes[i];
+        // 写入命令
+        quint16 netType = htons(type);
+        memcpy(pData, &netType, 2);
+        pData += 2;
+
+        // 写入用户ID
+        quint16 userId = htons(m_currentUserId);
+        memcpy(pData, &userId, 2);
+        pData += 2;
+
+        // 写入数据（包含序列号）
+        memcpy(pData, currentData.constData(), currentData.size());
+        pData += currentData.size();
+
+        // 计算并写入校验和
+        quint16 sum = 0;
+        for (int j = 0; j < currentData.size(); j++) {
+            sum += (quint8)currentData[j];
+        }
+        quint16 netSum = htons(sum);
+        memcpy(pData, &netSum, 2);
+
+        // 缓存消息用于可能的重传
+        if (m_messageCache.size() >= MAX_CACHE_SIZE) {
+            // 移除最旧的消息
+            m_messageCache.remove(m_messageCache.firstKey());
+        }
+        m_messageCache.insert(m_nSequence + i, CachedMessage{type, data, packet});
+
+        packets.append(packet);
     }
-    quint16 netSum = htons(sum);
-    memcpy(pData, &netSum, 2);
+    m_nSequence += totalPackets;
 
-    return packet;
+    return packets;
 }
 
 // 读取大端序的16位整数
@@ -111,35 +168,35 @@ quint32 readUint32(const QByteArray& data, int& pos) {
     return value;
 }
 
-void MessageBroadcaster::sendMessage(const QString &message)
+void MessageBroadcaster::sendDataByPackCut(const QString &message, MessageType messageType)
 {
-    QByteArray packet = createMessagePacket(YMsg, message);
+    QList<QByteArray> packets = createMessagePacket(messageType, message);
     qDebug() << "Sending message:" << message;
-    m_socket->write(packet);
-}
-
-void MessageBroadcaster::sendLoginBroadcast(const QString &username)
-{
-    m_username = username;  // 保存用户名
-    QByteArray packet = createMessagePacket(YConnect, username);
-    qDebug() << "Sending login broadcast:" << username;
-    m_socket->write(packet);
+    for(int i = 0; i < packets.size(); i++){
+        m_socket->write(packets[i]);
+        m_socket->waitForBytesWritten(1000);
+        qDebug() << packets[i];
+    }
 }
 
 void MessageBroadcaster::sendFileBroadcast(const QString &filename, qint64 filesize)
 {
     QString data = QString("%1 %2").arg(filename).arg(filesize);
-    QByteArray packet = createMessagePacket(YFile, data);
+    QList<QByteArray> packets = createMessagePacket(YFile, data);
     qDebug() << "Sending file broadcast:" << data;
-    m_socket->write(packet);
+    for (const QByteArray& packet : packets) {
+        m_socket->write(packet);
+    }
 }
 
 void MessageBroadcaster::requestFileDownload(const QString &filename, const QString &sender)
 {
     QString data = QString("%1 %2").arg(filename).arg(sender);
-    QByteArray packet = createMessagePacket(YRecv, data);
+    QList<QByteArray> packets = createMessagePacket(YRecv, data);
     qDebug() << "Requesting file download:" << data;
-    m_socket->write(packet);
+    for (const QByteArray& packet : packets) {
+        m_socket->write(packet);
+    }
 }
 
 void MessageBroadcaster::handleReadyRead()
@@ -196,7 +253,7 @@ void MessageBroadcaster::handleReadyRead()
 
 void MessageBroadcaster::parseMessage(const QByteArray &data)
 {
-    if (data.size() < 10) return;  // 至少需要头部(2) + 长度(4) + 命令(2) + 用户ID(2)
+    if (data.size() < 12) return;  // 至少需要头部(2) + 长度(4) + 命令(2) + 用户ID(2)
 
     int pos = 0;
     quint16 header;
@@ -214,10 +271,7 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
     length = ntohl(length);
     pos += 4;
 
-    if (length > data.size() - 8) {
-        qDebug() << "Invalid message length:" << length;
-        return;
-    }
+    if (data.size() < length + 8) return;  // 等待完整消息
 
     quint16 cmd;
     memcpy(&cmd, data.constData() + pos, 2);
@@ -229,50 +283,76 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
     userId = ntohs(userId);
     pos += 2;
 
-    int userIdInt = userId;
-    QByteArray messageData = data.mid(pos, length - 4);
+    // 读取序列号
+    quint16 sequence;
+    memcpy(&sequence, data.constData() + pos, 2);
+    sequence = ntohs(sequence);
+    pos += 2;
 
-    // 确保使用 UTF-8 解码
-    QString message = QString::fromUtf8(messageData);
-    qDebug() << "Parsed message:" << message;
+    // 数据内容长度 = length - 6（命令2+用户ID2+序列号2）
+    QByteArray messageData = data.mid(pos, length - 6);
 
-    int tempPos = pos + messageData.size();
+    // 计算校验和
     quint16 sum;
-    memcpy(&sum, data.constData() + tempPos, 2);
+    memcpy(&sum, data.constData() + pos + messageData.size(), 2);
     sum = ntohs(sum);
 
     quint16 calculatedSum = 0;
     for (int i = 0; i < messageData.size(); i++) {
         calculatedSum += (quint8)messageData[i];
     }
+
     if (calculatedSum != sum) {
         qDebug() << "Checksum mismatch:" << sum << "!=" << calculatedSum;
         return;
     }
 
+    // 处理特殊命令
+    if (cmd == YRetrans) {
+        handleRetransmissionRequest(messageData);
+        return;
+    }
+    qDebug() << "begain process the msg";
+    // 确保使用 UTF-8 解码
+    QString message = QString::fromUtf8(messageData);
+    
     switch (cmd) {
         case YConnect:
-            //m_userIdToName[userIdInt] = message;
-            m_userIdToName[userIdInt] = message;
             emit userLoggedIn(message);
+            m_userIdToName[userId] = message;
             break;
+        case YUserList: {
+            // message 形如 "1001|张三;1002|李四"
+            QStringList users = message.split(";", QString::SkipEmptyParts);
+            for (const QString& user : users) {
+                QStringList pair = user.split("|");
+                if (pair.size() == 2) {
+                    bool ok = false;
+                    int uid = pair[0].toInt(&ok);
+                    if (ok) m_userIdToName[uid] = pair[1];
+                }
+            }
+            break;
+        }
         case YMsg:
-            qDebug() << "msg from:" + m_userIdToName[userIdInt] + " message:" + message;
-            emit messageReceived(m_userIdToName[userIdInt], message);
+            if (m_userIdToName.count(userId) > 0) {
+                emit messageReceived(m_userIdToName[userId], message);
+            }
             break;
-
         case YDisCon:
-            emit userLoggedOut(message);
-            m_userIdToName.erase(userIdInt);
+            if (m_userIdToName.count(userId) > 0) {
+                emit userLoggedOut(m_userIdToName[userId]);
+                m_userIdToName.erase(userId);
+            }
             break;
         case YFile:
             {
                 QStringList parts = message.split(" ");
                 if (parts.size() >= 2) {
-                    bool ok;
-                    qint64 fileSize = parts[1].toLongLong(&ok);
-                    if (ok) {
-                        emit fileBroadcastReceived(m_userIdToName[userIdInt], parts[0], fileSize);
+                    QString filename = parts[0];
+                    qint64 filesize = parts[1].toLongLong();
+                    if (m_userIdToName.count(userId) > 0) {
+                        emit fileBroadcastReceived(m_userIdToName[userId], filename, filesize);
                     }
                 }
             }
@@ -281,12 +361,15 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
             {
                 QStringList parts = message.split(" ");
                 if (parts.size() >= 2) {
-                    emit fileDownloadRequested(parts[0], parts[1]);
+                    QString filename = parts[0];
+                    QString sender = parts[1];
+                    emit fileDownloadRequested(filename, sender);
                 }
             }
             break;
         default:
             qDebug() << "Unknown message type:" << cmd;
+            break;
     }
 }
 
@@ -299,7 +382,7 @@ void MessageBroadcaster::handleConnected()
 void MessageBroadcaster::handleDisconnected()
 {
     m_isConnected = false;
-    emit connectionError("与服务器断开连接");
+    emit disconnection(m_username);
 }
 
 void MessageBroadcaster::handleError(QAbstractSocket::SocketError socketError)
