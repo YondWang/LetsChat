@@ -1,101 +1,66 @@
 #include "CYondHandleEvent.h"
 
-bool CYondHandleEvent::validateSequence(int clientFd, size_t sequence) {
-    std::lock_guard<std::mutex> lock(m_sequenceMutex);
-    
-    auto it = m_clientSequences.find(clientFd);
-    if (it == m_clientSequences.end()) {
-        // 新客户端，初始化序列号
-        m_clientSequences[clientFd] = 0;
-        m_messageCache[clientFd] = MessageCache();  // 使用默认构造函数
-        return sequence == 0;
-    }
-    
-    // 检查序列号是否在可接受范围内（允许最多跳过10个序列号）
-    return sequence >= it->second && sequence <= it->second + 10;
-}
-
-void CYondHandleEvent::updateClientSequence(int clientFd, size_t sequence) {
-    std::lock_guard<std::mutex> lock(m_sequenceMutex);
-    m_clientSequences[clientFd] = sequence + 1;  // 更新为下一个期望的序列号
-}
-
-void CYondHandleEvent::handleOutOfOrderPacket(int clientFd, const CYondPack& msg, size_t sequence) {
-    MessageCache& cache = m_messageCache[clientFd];
-    std::lock_guard<std::mutex> lock(*cache.mutex);
-    
-    // 缓存乱序消息
-    cache.messages[sequence] = msg;
-    
-    // 检查是否可以处理缓存的消息
-    while (!cache.messages.empty()) {
-        auto it = cache.messages.begin();
-        if (it->first == cache.lastProcessedSeq + 1) {
-            // 处理缓存的消息
-            ProcessMessage(clientFd, it->second.Data());
-            cache.messages.erase(it);
-            cache.lastProcessedSeq++;
-        } else {
-            break;
-        }
-    }
-}
-
-void CYondHandleEvent::requestMissingPackets(int clientFd, size_t expectedSeq, size_t receivedSeq) {
-    // 创建重传请求消息
-    std::string requestData = std::to_string(expectedSeq) + "," + std::to_string(receivedSeq - 1);
-    CYondPack requestMsg(YRetrans, clientFd, requestData.c_str(), requestData.size());
-    
-    // 发送重传请求
-    const std::string& data = requestMsg.Data();
-    send(clientFd, data.c_str(), data.size(), 0);
-    
-    LOG_INFO("Requested retransmission for sequences " + std::to_string(expectedSeq) + 
-             " to " + std::to_string(receivedSeq - 1) + " from client " + std::to_string(clientFd));
-}
-
 void CYondHandleEvent::ProcessMessage(int clientFd, const CYondPack& msg) {
     if (msg.Size() == 0) {
         LOG_ERROR(YOND_ERR_RECV_PACKET, "Invalid message format");
         return;
     }
+
     // 处理消息内容
     CYondPack processMsg = msg;
 
-    switch (processMsg.m_sCmd) {
-        case YConnect:
-            // 处理连接请求
-            m_clientFdToIp[clientFd] = processMsg.m_strData;
-            LOG_INFO("Client " + m_clientFdToIp[clientFd] + " connected" + " broad login msg!");
-            BroadCastToAll(clientFd, processMsg.m_strData, YConnect);
-            break;
+    switch (msg.m_sCmd) {
+    case YConnect: {
+        // 记录新客户端
+        m_clientFdToIp[clientFd] = msg.m_strData;
+        LOG_INFO("Client " + m_clientFdToIp[clientFd] + " connected" + " broad login msg!");
+        // 发送所有在线用户列表
+        std::string userList;
+        for (const auto& kv : m_clientFdToIp) {
+            unsigned short uid = (unsigned short)(kv.first & 0xFFFF);
+            userList += std::to_string(uid) + "|" + kv.second + ";";
+        }
+        if (!userList.empty()) userList.pop_back(); // 去掉最后一个分号
+        CYondPack userListMsg(YUserList, clientFd, userList.c_str(), userList.size());
+        send(clientFd, userListMsg.Data().data(), userListMsg.Size(), 0);
+        // 广播新用户上线
+        BroadCastToAll(clientFd, msg.m_strData, YConnect, clientFd);
+        break;
+    }
 
-        case YMsg:
-            // 广播消息给所有客户端
-            if (!processMsg.m_strData.empty()) {
-                LOG_INFO("Broadcasting message from " + m_clientFdToIp[clientFd] + ": " + processMsg.m_strData);
-                BroadCastToAll(clientFd, processMsg.m_strData);
-            }
-            break;
+    case YMsg:
+        // 广播消息给所有客户端
+        if (!msg.m_strData.empty()) {
+            LOG_INFO("Broadcasting message from " + m_clientFdToIp[clientFd] + ": " + msg.m_strData);
+            BroadCastToAll(clientFd, msg.m_strData, YMsg, clientFd);
+        }
+        break;
 
-        case YFileStart:
-            HandleFileStart(clientFd, processMsg);
-            break;
+    case YFile:
+        if (!msg.m_strData.empty()) {
+            LOG_INFO("Recv a file upload msg from" + m_clientFdToIp[clientFd] + ": " + msg.m_strData);
+            BroadCastToAll(clientFd, msg.m_strData, YFile, clientFd);
+        }
+        break;
 
-        case YFileData:
-            HandleFileData(clientFd, processMsg);
-            break;
+    case YFileStart:
+        HandleFileStart(clientFd, msg);
+        break;
 
-        case YFileEnd:
-            HandleFileEnd(clientFd, processMsg);
-            break;
+    case YFileData:
+        HandleFileData(clientFd, msg);
+        break;
 
-        case YFileAck:
-            HandleFileAck(clientFd, processMsg);
-            break;
+    case YFileEnd:
+        HandleFileEnd(clientFd, msg);
+        break;
 
-        default:
-            LOG_WARNING("Unknown message type: " + std::to_string(processMsg.m_sCmd));
+    case YFileAck:
+        HandleFileAck(clientFd, msg);
+        break;
+
+    default:
+        LOG_WARNING("Unknown message type: " + std::to_string(msg.m_sCmd));
     }
 }
 
@@ -133,7 +98,11 @@ void CYondHandleEvent::ExtractAndProcessPackets(int clientFd) {
         buffer.erase(0, totalLen);
         // 处理完整包
         m_threadPool.Enqueue([this, clientFd, onePacket]() {
-            ProcessMessage(clientFd, onePacket);
+            size_t packetSize = onePacket.size();
+            CYondPack pack(onePacket.c_str(), packetSize);
+            if (packetSize > 0) {  // 只有当包解析成功时才处理
+                ProcessMessage(clientFd, pack);
+            }
         });
     }
 }

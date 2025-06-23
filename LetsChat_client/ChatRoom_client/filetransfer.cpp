@@ -38,7 +38,7 @@ void FileTransfer::uploadFile(const QString &filePath, const QString &host, quin
     
     m_uploadFile = new QFile(filePath);
     if (!m_uploadFile->open(QIODevice::ReadOnly)) {
-        emit error(u8"无法打开文件进行上传");
+        emit error("无法打开文件进行上传");
         return;
     }
 
@@ -55,7 +55,7 @@ void FileTransfer::downloadFile(const QString &filename, const QString &host, qu
     
     m_downloadFile = new QFile(filename);
     if (!m_downloadFile->open(QIODevice::WriteOnly)) {
-        emit error(u8"无法创建文件进行下载");
+        emit error("无法创建文件进行下载");
         return;
     }
 

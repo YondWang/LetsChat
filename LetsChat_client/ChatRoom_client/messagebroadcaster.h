@@ -5,7 +5,6 @@
 #include <QByteArray>
 #include <QMap>
 #include <QString>
-#include <map>
 
 class MessageBroadcaster : public QObject
 {
@@ -41,38 +40,20 @@ signals:
     void fileDownloadRequested(const QString &filename, const QString &sender);
     void disconnection(const QString &username);
     void connectionError(const QString &error);
-    void retransmissionRequested(quint16 startSeq, quint16 endSeq);
-
 private slots:
     void handleReadyRead();
     void handleConnected();
     void handleDisconnected();
     void handleError(QAbstractSocket::SocketError socketError);
-    void handleRetransmissionRequest(const QByteArray &data);
 
 private:
     static const quint16 MESSAGE_HEADER = 0xFEFF;
-
     QList<QByteArray> createMessagePacket(MessageType type, const QString &data);
     void parseMessage(const QByteArray &data);
-    void retransmitMessages(quint16 startSeq, quint16 endSeq);
-
     static const int MAX_PACKET_SIZE = 2048;
-    qint16 m_nSequence;
-
     QTcpSocket *m_socket;
     QByteArray m_buffer;
     bool m_isConnected;
     int m_currentUserId;
     QString m_username;
-
-    std::map<int, QString> m_userIdToName;  // 用户ID到用户名的映射
-
-    struct CachedMessage {
-        MessageType type;
-        QString data;
-        QByteArray rawData;
-    };
-    QMap<quint16, CachedMessage> m_messageCache;
-    static const int MAX_CACHE_SIZE = 1000;
 }; 

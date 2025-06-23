@@ -50,37 +50,6 @@ void writeUint32(char*& pData, quint32 value) {
     pData += 4;
 }
 
-void MessageBroadcaster::handleRetransmissionRequest(const QByteArray &data) {
-    QString request = QString::fromUtf8(data);
-    QStringList parts = request.split(",");
-    if (parts.size() != 2) {
-        qDebug() << "Invalid retransmission request format";
-        return;
-    }
-
-    bool ok1, ok2;
-    quint16 startSeq = parts[0].toUShort(&ok1);
-    quint16 endSeq = parts[1].toUShort(&ok2);
-    
-    if (!ok1 || !ok2) {
-        qDebug() << "Invalid sequence numbers in retransmission request";
-        return;
-    }
-
-    retransmitMessages(startSeq, endSeq);
-}
-
-void MessageBroadcaster::retransmitMessages(quint16 startSeq, quint16 endSeq) {
-    for (quint16 seq = startSeq; seq <= endSeq; ++seq) {
-        if (m_messageCache.contains(seq)) {
-            const CachedMessage &msg = m_messageCache[seq];
-            m_socket->write(msg.rawData);
-            m_socket->flush();
-            qDebug() << "Retransmitted message with sequence" << seq;
-        }
-    }
-}
-
 QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, const QString &data)
 {
     // 确保使用 UTF-8 编码
@@ -93,18 +62,11 @@ QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, cons
         int currentSize = qMin(MAX_PACKET_SIZE, dataBytes.size() - i * MAX_PACKET_SIZE);
         QByteArray currentData = dataBytes.mid(i * MAX_PACKET_SIZE, currentSize);
 
-        // 添加序列号到数据前面
-        QByteArray sequenceData;
-        sequenceData.resize(2);
-        quint16 netSequence = htons(m_nSequence + i);
-        memcpy(sequenceData.data(), &netSequence, 2);
-        currentData.prepend(sequenceData);
-
-        qint32 length = currentData.size() + 4;  // 数据长度(包含序列号) + 命令(2) + 用户ID(2)
+        qint32 length = currentData.size() + 4;  // 数据长度 + 命令(2) + 用户ID(2)
         
         // 预分配空间
         QByteArray packet;
-        packet.resize(2 + 4 + 2 + 2 + currentData.size() + 2); // 头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据(含序列号) + 校验和(2)
+        packet.resize(2 + 4 + 2 + 2 + currentData.size() + 2); // 头部(2) + 长度(4) + 命令(2) + 用户ID(2) + 数据 + 校验和(2)
         char* pData = packet.data();
 
         // 写入消息头（使用网络字节序）
@@ -127,7 +89,7 @@ QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, cons
         memcpy(pData, &userId, 2);
         pData += 2;
 
-        // 写入数据（包含序列号）
+        // 写入数据
         memcpy(pData, currentData.constData(), currentData.size());
         pData += currentData.size();
 
@@ -139,16 +101,8 @@ QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, cons
         quint16 netSum = htons(sum);
         memcpy(pData, &netSum, 2);
 
-        // 缓存消息用于可能的重传
-        if (m_messageCache.size() >= MAX_CACHE_SIZE) {
-            // 移除最旧的消息
-            m_messageCache.remove(m_messageCache.firstKey());
-        }
-        m_messageCache.insert(m_nSequence + i, CachedMessage{type, data, packet});
-
         packets.append(packet);
     }
-    m_nSequence += totalPackets;
 
     return packets;
 }
@@ -202,53 +156,7 @@ void MessageBroadcaster::requestFileDownload(const QString &filename, const QStr
 void MessageBroadcaster::handleReadyRead()
 {
     QByteArray data = m_socket->readAll();
-    qDebug() << "Received raw data:" << data.toHex();
-    m_buffer.append(data);
-
-    while (m_buffer.size() >= 2) {
-        // 查找消息头部
-        int headerPos = -1;
-        for (int i = 0; i <= m_buffer.size() - 2; i++) {
-            quint16 header;
-            memcpy(&header, m_buffer.constData() + i, 2);
-            header = ntohs(header);
-            if (header == MESSAGE_HEADER) {
-                headerPos = i;
-                break;
-            }
-        }
-
-        if (headerPos == -1) {
-            if (m_buffer.size() > 1) {
-                m_buffer = m_buffer.right(1);
-            }
-            return;
-        }
-
-        if (headerPos > 0) {
-            m_buffer.remove(0, headerPos);
-        }
-
-        if (m_buffer.size() < 10) return;  // 至少需要头部(2) + 长度(4) + 命令(2) + 用户ID(2)
-
-        int pos = 0;
-        quint16 header;
-        memcpy(&header, m_buffer.constData() + pos, 2);
-        header = ntohs(header);
-        pos += 2;
-
-        quint32 length;
-        memcpy(&length, m_buffer.constData() + pos, 4);
-        length = ntohl(length);
-        pos += 4;
-
-        if (m_buffer.size() < length + 8) return;  // 等待完整消息
-
-        QByteArray message = m_buffer.left(length + 8);
-        m_buffer.remove(0, length + 8);
-
-        parseMessage(message);
-    }
+    parseMessage(data);
 }
 
 void MessageBroadcaster::parseMessage(const QByteArray &data)
@@ -283,14 +191,8 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
     userId = ntohs(userId);
     pos += 2;
 
-    // 读取序列号
-    quint16 sequence;
-    memcpy(&sequence, data.constData() + pos, 2);
-    sequence = ntohs(sequence);
-    pos += 2;
-
-    // 数据内容长度 = length - 6（命令2+用户ID2+序列号2）
-    QByteArray messageData = data.mid(pos, length - 6);
+    // 数据内容长度 = length - 4（命令2+用户ID2）
+    QByteArray messageData = data.mid(pos, length - 4);
 
     // 计算校验和
     quint16 sum;
@@ -309,53 +211,41 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
 
     // 处理特殊命令
     if (cmd == YRetrans) {
-        handleRetransmissionRequest(messageData);
         return;
     }
     qDebug() << "begain process the msg";
     // 确保使用 UTF-8 解码
     QString message = QString::fromUtf8(messageData);
     
-    switch (cmd) {
+    switch (static_cast<MessageType>(cmd)) {
         case YConnect:
             emit userLoggedIn(message);
-            m_userIdToName[userId] = message;
             break;
-        case YUserList: {
-            // message 形如 "1001|张三;1002|李四"
-            QStringList users = message.split(";", QString::SkipEmptyParts);
-            for (const QString& user : users) {
-                QStringList pair = user.split("|");
-                if (pair.size() == 2) {
-                    bool ok = false;
-                    int uid = pair[0].toInt(&ok);
-                    if (ok) m_userIdToName[uid] = pair[1];
-                }
-            }
-            break;
-        }
         case YMsg:
-            if (m_userIdToName.count(userId) > 0) {
-                emit messageReceived(m_userIdToName[userId], message);
-            }
-            break;
-        case YDisCon:
-            if (m_userIdToName.count(userId) > 0) {
-                emit userLoggedOut(m_userIdToName[userId]);
-                m_userIdToName.erase(userId);
-            }
+            emit messageReceived(QString::number(userId), message);
             break;
         case YFile:
             {
-                QStringList parts = message.split(" ");
+                QStringList parts = message.split(' ');
                 if (parts.size() >= 2) {
                     QString filename = parts[0];
                     qint64 filesize = parts[1].toLongLong();
-                    if (m_userIdToName.count(userId) > 0) {
-                        emit fileBroadcastReceived(m_userIdToName[userId], filename, filesize);
+                    emit fileBroadcastReceived(QString::number(userId), filename, filesize);
+                }
+            }
+            break;
+        case YUserList:
+            {
+                QStringList users = message.split(';', QString::SkipEmptyParts);
+                for (const QString& user : users) {
+                    QStringList parts = user.split('|');
+                    if (parts.size() == 2) {
+                        emit userLoggedIn(parts[1]);
                     }
                 }
             }
+            break;
+        case YDisCon:
             break;
         case YRecv:
             {
@@ -376,17 +266,19 @@ void MessageBroadcaster::parseMessage(const QByteArray &data)
 void MessageBroadcaster::handleConnected()
 {
     m_isConnected = true;
-    //emit connectionError("");
+    qDebug() << "Connected to server";
 }
 
 void MessageBroadcaster::handleDisconnected()
 {
     m_isConnected = false;
+    qDebug() << "Disconnected from server";
     emit disconnection(m_username);
 }
 
 void MessageBroadcaster::handleError(QAbstractSocket::SocketError socketError)
 {
-    m_isConnected = false;
-    emit connectionError(m_socket->errorString());
+    QString errorMessage = m_socket->errorString();
+    qDebug() << "Socket error:" << errorMessage;
+    emit connectionError(errorMessage);
 }

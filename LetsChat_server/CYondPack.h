@@ -41,7 +41,7 @@ public:
 		}
 		m_sSum = 0;
 		// 只对数据内容做校验和，跳过前2字节序列号
-		for (size_t i = 2; i < m_strData.size(); ++i) {
+		for (size_t i = 0; i < m_strData.size(); ++i) {
 			m_sSum += (unsigned char)(m_strData[i]);
 		}
 	}
