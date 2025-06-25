@@ -1,6 +1,18 @@
 #include "filetransfer.h"
 #include <QDebug>
 #include <QFileInfo>
+#include <QDataStream>
+#include <QThread>
+#include <QMessageBox>
+
+// 分包协议结构
+struct FilePacketHeader {
+    char filename[128];
+    qint64 totalSize;
+    qint64 offset;
+    qint32 dataLen;
+    bool isLast;
+};
 
 FileTransfer::FileTransfer(QObject *parent)
     : QObject(parent)
@@ -18,6 +30,12 @@ FileTransfer::FileTransfer(QObject *parent)
             this, &FileTransfer::handleUploadError);
     connect(m_downloadSocket, QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::error),
             this, &FileTransfer::handleDownloadError);
+            
+    // 添加连接状态的信号槽
+    connect(m_uploadSocket, &QTcpSocket::connected, this, &FileTransfer::handleUploadConnected);
+    connect(m_downloadSocket, &QTcpSocket::connected, this, &FileTransfer::handleDownloadConnected);
+    connect(m_uploadSocket, &QTcpSocket::disconnected, this, &FileTransfer::handleUploadDisconnected);
+    connect(m_downloadSocket, &QTcpSocket::disconnected, this, &FileTransfer::handleDownloadDisconnected);
 }
 
 FileTransfer::~FileTransfer()
@@ -34,19 +52,28 @@ FileTransfer::~FileTransfer()
 
 void FileTransfer::uploadFile(const QString &filePath, const QString &host, quint16 port)
 {
-    QMutexLocker locker(&m_uploadMutex);
+    if (m_uploadSocket->state() == QAbstractSocket::ConnectedState) {
+        m_uploadSocket->disconnectFromHost();
+    }
     
-    m_uploadFile = new QFile(filePath);
-    if (!m_uploadFile->open(QIODevice::ReadOnly)) {
-        emit error("无法打开文件进行上传");
+    qDebug() << "正在连接上传服务器..." << host << ":" << port;
+    emit connectionStatus(QString("正在连接上传服务器 %1:%2").arg(host).arg(port));
+    
+    m_uploadSocket->connectToHost(host, port);
+    if (!m_uploadSocket->waitForConnected(3000)) {
+        QString errorMsg = QString("无法连接到上传服务器 %1:%2 - %3").arg(host).arg(port).arg(m_uploadSocket->errorString());
+        qDebug() << errorMsg;
+        emit error(errorMsg);
         return;
     }
-
-    m_uploadTotalBytes = m_uploadFile->size();
     
-    QString msg = QString("FILE %1 %2").arg(QFileInfo(filePath).fileName()).arg(m_uploadTotalBytes);
-    m_uploadSocket->connectToHost(host, port);
-    m_uploadSocket->write(msg.toUtf8());
+    FileSenderThread* sender = new FileSenderThread(filePath);
+    connect(sender, &FileSenderThread::fileChunkReady, this, [this](const QByteArray& chunk){
+        m_uploadSocket->write(chunk);
+        m_uploadSocket->waitForBytesWritten(3000);
+    });
+    connect(sender, &QThread::finished, sender, &QObject::deleteLater);
+    sender->start();
 }
 
 void FileTransfer::downloadFile(const QString &filename, const QString &host, quint16 port)
@@ -55,12 +82,32 @@ void FileTransfer::downloadFile(const QString &filename, const QString &host, qu
     
     m_downloadFile = new QFile(filename);
     if (!m_downloadFile->open(QIODevice::WriteOnly)) {
-        emit error("无法创建文件进行下载");
+        QString errorMsg = QString("无法创建文件进行下载: %1").arg(m_downloadFile->errorString());
+        qDebug() << errorMsg;
+        emit error(errorMsg);
+        delete m_downloadFile;
+        m_downloadFile = nullptr;
+        return;
+    }
+
+    qDebug() << "正在连接下载服务器..." << host << ":" << port;
+    emit connectionStatus(QString("正在连接下载服务器 %1:%2").arg(host).arg(port));
+    
+    if (m_downloadSocket->state() == QAbstractSocket::ConnectedState) {
+        m_downloadSocket->disconnectFromHost();
+    }
+    
+    m_downloadSocket->connectToHost(host, port);
+    if (!m_downloadSocket->waitForConnected(3000)) {
+        QString errorMsg = QString("无法连接到下载服务器 %1:%2 - %3").arg(host).arg(port).arg(m_downloadSocket->errorString());
+        qDebug() << errorMsg;
+        emit error(errorMsg);
+        delete m_downloadFile;
+        m_downloadFile = nullptr;
         return;
     }
 
     QString msg = QString("REQ %1").arg(filename);
-    m_downloadSocket->connectToHost(host, port);
     m_downloadSocket->write(msg.toUtf8());
 }
 
@@ -143,13 +190,63 @@ void FileTransfer::receiveFileChunk()
 void FileTransfer::handleUploadError(QAbstractSocket::SocketError socketError)
 {
     Q_UNUSED(socketError);
-    QString errorMsg = u8"上传文件时发生错误: " + m_uploadSocket->errorString();
+    QString errorMsg = "上传文件时发生错误: " + m_uploadSocket->errorString();
     emit error(errorMsg);
 }
 
 void FileTransfer::handleDownloadError(QAbstractSocket::SocketError socketError)
 {
     Q_UNUSED(socketError);
-    QString errorMsg = u8"下载文件时发生错误: " + m_downloadSocket->errorString();
+    QString errorMsg = "下载文件时发生错误: " + m_downloadSocket->errorString();
     emit error(errorMsg);
-} 
+}
+
+FileSenderThread::FileSenderThread(const QString& filePath, QObject* parent)
+    : QThread(parent), m_filePath(filePath) {}
+
+void FileSenderThread::run() {
+    QFile file(m_filePath);
+    if (!file.open(QIODevice::ReadOnly)) return;
+    qint64 totalSize = file.size();
+    qint64 offset = 0;
+    const int PACKET_SIZE = 4096;
+    QByteArray filenameData = QFileInfo(m_filePath).fileName().toUtf8();
+    filenameData = filenameData.leftJustified(128, '\0', true);
+
+    while (!file.atEnd()) {
+        QByteArray data = file.read(PACKET_SIZE);
+        QByteArray packet;
+        QDataStream stream(&packet, QIODevice::WriteOnly);
+        stream.writeRawData(filenameData.constData(), 128);
+        stream << totalSize << offset << (qint32)data.size() << (bool)file.atEnd();
+        packet.append(data);
+        emit fileChunkReady(packet);
+        offset += data.size();
+        msleep(2);
+    }
+    file.close();
+}
+
+void FileTransfer::handleUploadConnected()
+{
+    qDebug() << "upload server connected!";
+    emit connectionStatus("upload server connected!");
+}
+
+void FileTransfer::handleDownloadConnected()
+{
+    qDebug() << "download server connected!";
+    emit connectionStatus("download server connected!");
+}
+
+void FileTransfer::handleUploadDisconnected()
+{
+    qDebug() << "upload server disconnected!";
+    emit connectionStatus("upload server disconnected!");
+}
+
+void FileTransfer::handleDownloadDisconnected()
+{
+    qDebug() << "download server disconnected!";
+    emit connectionStatus("download server disconnected!");
+}

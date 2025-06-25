@@ -83,7 +83,7 @@ public:
 	}
 
 	int HandleEvent(epoll_event* events) {
-		char buffer[2048];
+		char buffer[4096];
 		size_t n = recv(events->data.fd, buffer, sizeof(buffer), 0);
 
 		if (n <= 0) {
@@ -129,72 +129,14 @@ public:
 
 		// 发送确认消息
 		CYondPack ackMsg(YFileAck, msg.m_sUser, "START", 5);
-		send(clientFd, ackMsg.Data().data(), ackMsg.Size(), 0);
-	}
-
-	void HandleFileData(int clientFd, const CYondPack& msg) {
-		std::lock_guard<std::mutex> lock(m_fileTransfersMutex);
-		auto it = m_fileTransfers.find(clientFd);
-		if (it == m_fileTransfers.end()) {
-			LOG_ERROR(YOND_ERR_RECV_PACKET, "No active file transfer for client");
-			return;
-		}
-
-		FileTransferState& state = it->second;
-		std::lock_guard<std::mutex> stateLock(*state.mutex);
-
-		// 将数据包添加到队列
-		state.receivedPackets.push(msg.m_strData);
-		state.receivedSize += msg.m_strData.size();
-
-		// 发送确认消息
-		CYondPack ackMsg(YFileAck, msg.m_sUser, "DATA", 4);
-		send(clientFd, ackMsg.Data().data(), ackMsg.Size(), 0);
-
-		// 检查是否接收完成
-		if (state.receivedSize >= state.totalSize) {
-			state.isComplete = true;
-			state.cv->notify_all();
+		if (send(clientFd, ackMsg.Data().data(), ackMsg.Size(), 0) <= 0) {
+			LOG_ERROR(YOND_ERR_SOCKET_SEND, "err to send file ack!");
 		}
 	}
 
-	void HandleFileEnd(int clientFd, const CYondPack& msg) {
-		std::lock_guard<std::mutex> lock(m_fileTransfersMutex);
-		auto it = m_fileTransfers.find(clientFd);
-		if (it == m_fileTransfers.end()) {
-			LOG_ERROR(YOND_ERR_RECV_PACKET, "No active file transfer for client");
-			return;
-		}
+	void HandleFileData(int clientFd, const CYondPack& msg);
 
-		FileTransferState& state = it->second;
-		std::unique_lock<std::mutex> stateLock(*state.mutex);
-
-		// 等待所有数据包接收完成
-		state.cv->wait(stateLock, [&state] { return state.isComplete; });
-
-		// 按顺序写入文件
-		std::string filePath = "received_files/" + state.fileName;
-		std::ofstream file(filePath, std::ios::binary);
-		if (!file.is_open()) {
-			LOG_ERROR(YOND_ERR_RECV_PACKET, "Failed to open file for writing: " + filePath);
-			return;
-		}
-
-		while (!state.receivedPackets.empty()) {
-			std::string packet = state.receivedPackets.front();
-			file.write(packet.c_str(), packet.size());
-			state.receivedPackets.pop();
-		}
-
-		file.close();
-
-		// 发送完成确认
-		CYondPack ackMsg(YFileAck, msg.m_sUser, "END", 3);
-		send(clientFd, ackMsg.Data().data(), ackMsg.Size(), 0);
-
-		// 清理传输状态
-		m_fileTransfers.erase(it);
-	}
+	void HandleFileEnd(int clientFd, const CYondPack& msg);
 
 	void HandleFileAck(int clientFd, const CYondPack& msg) {
 		// 处理文件传输确认消息
@@ -236,5 +178,12 @@ public:
 	//void ProcessMessage(int clientFd, const std::string& data);
 	void ProcessMessage(int clientFd, const CYondPack& msg);
 	void ExtractAndProcessPackets(int clientFd);
+
+	// 文件传输说明：
+	// 1. 客户端发送YFileStart，内容为 文件名|文件总字节数
+	// 2. 客户端分包发送YFileData，内容为文件二进制数据
+	// 3. 客户端发送YFileEnd，通知服务端写入文件
+	// 4. 服务端收到YFileStart后，创建FileTransferState，收到YFileData时入队，收到YFileEnd后在独立线程中写入文件
+	// 5. 所有文件传输相关操作均加锁，保证线程安全
 };
 

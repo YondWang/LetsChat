@@ -5,6 +5,9 @@
 #include <QByteArray>
 #include <QMap>
 #include <QString>
+#include <QQueue>
+#include <QWaitCondition>
+#include <QMutex>
 
 class MessageBroadcaster : public QObject
 {
@@ -31,15 +34,18 @@ public:
     void sendDataByPackCut(const QString &message, MessageType messageType = YMsg);
     void sendFileBroadcast(const QString &filename, qint64 filesize);
     void requestFileDownload(const QString &filename, const QString &sender);
+    void sendFile(const QString& filePath);
 
 signals:
     void messageReceived(const QString &username, const QString &message);
-    void userLoggedIn(const QString &username);
-    void userLoggedOut(const QString &username);
+    void userLoggedIn(int userId, const QString &userName);
+    void userLoggedOut(int userId);
     void fileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
     void fileDownloadRequested(const QString &filename, const QString &sender);
     void disconnection(const QString &username);
     void connectionError(const QString &error);
+    void connected();
+    void fileAckReceived(const QString& ackType);
 private slots:
     void handleReadyRead();
     void handleConnected();
@@ -49,11 +55,25 @@ private slots:
 private:
     static const quint16 MESSAGE_HEADER = 0xFEFF;
     QList<QByteArray> createMessagePacket(MessageType type, const QString &data);
+    QList<QByteArray> createMessagePacket(MessageType type, const QByteArray &data);
     void parseMessage(const QByteArray &data);
-    static const int MAX_PACKET_SIZE = 2048;
+    static const int MAX_PACKET_SIZE = 4096;
     QTcpSocket *m_socket;
     QByteArray m_buffer;
     bool m_isConnected;
     int m_currentUserId;
     QString m_username;
+    qint64 m_fileSendTotal;
+    qint64 m_fileSendCurrent;
+    qint64 m_lastChunkSize;
+    bool m_waitingFileAck = false;
+    QString m_expectedAckType;
+    QQueue<QByteArray> m_fileSendQueue;
+    int m_fileSendIndex = 0;
+    QMutex m_fileSendMutex;
+    QWaitCondition m_fileSendCond;
+    void sendNextFileChunk();
+    void handleFileAck(const QString& ackType);
+    QString m_lastSendFileName;
+    QQueue<int> m_fileSendDataLens;
 }; 

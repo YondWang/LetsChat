@@ -21,10 +21,15 @@ Widget::Widget(QString usrName, QWidget* parent)
 	setupConnections();
     ui->connectStatus_lb->setText("connectStatus:false!!!");
 
+	// 服务器地址和端口
+    //const QString SERVER_HOST = "172.26.220.193";
+    const QString SERVER_HOST = "127.0.0.1";
+	const quint16 SERVER_PORT = 2903;
+
 	// 连接到服务器
-    m_broadcaster->connectToServer("127.0.0.1", 2903);
-    qDebug() << "connectToServer\n";
-    ui->connectStatus_lb->setText("connectStatus:true!!!");
+    m_broadcaster->connectToServer(SERVER_HOST, SERVER_PORT);
+    qDebug() << "connectToServer to" << SERVER_HOST << ":" << SERVER_PORT << "\n";
+
 	// 发送登录广播
     m_broadcaster->sendDataByPackCut(m_username, MessageBroadcaster::YConnect);
     qDebug() << "broadcast login msg\n";
@@ -56,6 +61,9 @@ void Widget::setupConnections()
         this, &Widget::handleDisconnected);
 	connect(m_broadcaster, &MessageBroadcaster::connectionError,
 		this, &Widget::handleConnectionError);
+    connect(m_broadcaster, &MessageBroadcaster::connected, this, [this](){
+        ui->connectStatus_lb->setText("connectStatus:true!!!");
+    });
 
 	// 文件传输信号连接
 	connect(m_fileTransfer, &FileTransfer::uploadProgress,
@@ -97,38 +105,38 @@ void Widget::on_sendFile_pb_clicked()
     QString filePath = QFileDialog::getOpenFileName(this, "选择要发送的文件");
 	if (filePath.isEmpty()) return;
 
-	QFileInfo fileInfo(filePath);
-	m_broadcaster->sendFileBroadcast(fileInfo.fileName(), fileInfo.size());
+	// 调用新的、统一的文件发送接口
+	if (m_broadcaster) {
+		m_broadcaster->sendFile(filePath);
+	}
 
-    m_uploadProgress = new QProgressDialog("正在上传文件...", "取消", 0, 100, this);
-	m_uploadProgress->setWindowModality(Qt::WindowModal);
-	m_uploadProgress->setAutoClose(true);
-	m_uploadProgress->setAutoReset(true);
-
-	m_fileTransfer->uploadFile(filePath, "localhost", 8888);
+	// 提示用户文件正在后台发送
+    QMessageBox::information(this, "file transfing", "file is upload in background");
 }
 
 void Widget::handleMessageReceived(const QString& username, const QString& message)
 {
-    displayMessage(username, message);
+    QString strusername = m_onlineUserName[username.toInt()];
+    displayMessage(strusername, message);
 }
 
-void Widget::handleUserLoggedIn(const QString& username)
+void Widget::handleUserLoggedIn(int userId, const QString &userName)
 {
-	if (username != m_username) {
-        QString msg = username;
-        msg += "_加入了聊天室";
+    m_onlineUserName[userId] = userName;
+    if (userId != m_myUserId) {
+        QString msg = userName + "_加入了聊天室";
         displayMessage("系统", msg);
-		updateUserList();
-	}
+    }
+    updateUserList();
 }
 
-void Widget::handleUserLoggedOut(const QString& username)
+void Widget::handleUserLoggedOut(int userId)
 {
-    QString msg = username;
-    msg += "_离开了聊天室";
+    QString userName = m_onlineUserName.value(userId, QString::number(userId));
+    QString msg = userName + "_离开了聊天室";
     displayMessage("系统", msg);
-	updateUserList();
+    m_onlineUserName.remove(userId);
+    updateUserList();
 }
 
 void Widget::handleFileBroadcastReceived(const QString& sender, const QString& filename, qint64 filesize)
@@ -200,7 +208,7 @@ void Widget::handleFileTransferError(const QString& errorMessage)
 
 void Widget::updateUserList()
 {
-	// TODO: 实现用户列表更新
+
 }
 
 void Widget::displayMessage(const QString& sender, const QString& message)

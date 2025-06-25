@@ -33,6 +33,7 @@ const YondErrCode YOND_ERR_THREAD_CREATE = 2009; // Error creating thread
 const YondErrCode YOND_ERR_RECV_PACKET = 2050;	//Error recv packet
 const YondErrCode YOND_ERR_PACKET_SUMCHECK = 2051;	//Error packet sumCheck
 const YondErrCode ERR_LOG_THREAD_TASK = 2052;	//Error thread task
+const YondErrCode YOND_ERR_FILE_RECV = 2053;	//Error recv file
 
 #endif // !_COMMON_ERROR_CODE_H_
 

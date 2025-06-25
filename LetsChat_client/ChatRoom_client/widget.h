@@ -41,8 +41,8 @@ private slots:
     void on_send_pb_clicked();
     
     void handleMessageReceived(const QString &username, const QString &message);
-    void handleUserLoggedIn(const QString &username);
-    void handleUserLoggedOut(const QString &username);
+    void handleUserLoggedIn(int userId, const QString &userName);
+    void handleUserLoggedOut(int userId);
     void handleFileBroadcastReceived(const QString &sender, const QString &filename, qint64 filesize);
     void handleFileDownloadRequested(const QString &filename, const QString &sender);
     void handleDisconnected(const QString &username);
@@ -73,6 +73,8 @@ private:
     QProgressDialog *m_downloadProgress;
     
     QMap<QString, QString> m_downloadedFiles; // 文件名->本地保存路径
+    QMap<int, QString> m_onlineUserName; // userId->userName
+    int m_myUserId; // 当前用户id
     
     void setupConnections();
     void updateUserList();

@@ -45,7 +45,7 @@ public:
 			m_sSum += (unsigned char)(m_strData[i]);
 		}
 	}
-	CYondPack(const char* pData, size_t& nSize) {
+	CYondPack(const char* pData, size_t nSize) {
 		// 打印接收到的原始数据
 		LOG_INFO("Received raw data:");
 		for (size_t i = 0; i < nSize; i++) {
