@@ -83,7 +83,7 @@ public:
 	}
 
 	int HandleEvent(epoll_event* events) {
-		char buffer[4096];
+		char buffer[8192];
 		size_t n = recv(events->data.fd, buffer, sizeof(buffer), 0);
 
 		if (n <= 0) {

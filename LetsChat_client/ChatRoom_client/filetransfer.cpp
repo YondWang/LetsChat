@@ -209,7 +209,7 @@ void FileSenderThread::run() {
     if (!file.open(QIODevice::ReadOnly)) return;
     qint64 totalSize = file.size();
     qint64 offset = 0;
-    const int PACKET_SIZE = 4096;
+    const int PACKET_SIZE = 8192;
     QByteArray filenameData = QFileInfo(m_filePath).fileName().toUtf8();
     filenameData = filenameData.leftJustified(128, '\0', true);
 

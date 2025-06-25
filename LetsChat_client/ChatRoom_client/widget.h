@@ -17,7 +17,7 @@
 #include <QHBoxLayout>
 #include <QFileInfo>
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 8192
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Widget; }

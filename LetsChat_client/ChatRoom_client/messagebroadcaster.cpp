@@ -71,7 +71,7 @@ QList<QByteArray> MessageBroadcaster::createMessagePacket(MessageType type, cons
     QList<QByteArray> packets;
     int totalSize = data.size();
     int offset = 0;
-    const int DATA_MAX = 4096; // 只分数据部分
+    const int DATA_MAX = 8192; // 只分数据部分
     while (offset < totalSize) {
         int currentSize = qMin(DATA_MAX, totalSize - offset);
         QByteArray currentData = data.mid(offset, currentSize);
@@ -327,7 +327,7 @@ void MessageBroadcaster::sendFile(const QString& filePath)
 
     // 2. 预分包所有YFileData，并记录每个分包的数据长度
     while (!file.atEnd()) {
-        QByteArray chunk = file.read(4096);
+        QByteArray chunk = file.read(8192);
         QList<QByteArray> dataPackets = createMessagePacket(YFileData, chunk);
         for (const QByteArray& packet : dataPackets) {
             m_fileSendQueue.enqueue(packet);

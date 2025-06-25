@@ -45,7 +45,7 @@ private:
     qint64 m_uploadTotalBytes;
     qint64 m_downloadTotalBytes;
     
-    static const int BUFFER_SIZE = 4096;
+    static const int BUFFER_SIZE = 8192;
     void sendFileChunk();
     void receiveFileChunk();
 };

@@ -312,49 +312,49 @@ void Widget::displayFileMessage(const QString& sender, const QString& filename, 
 void Widget::onFileDownloadClicked()
 {
     // 找到按钮对应的文件名
-    QPushButton* btn = qobject_cast<QPushButton*>(sender());
-    if (!btn) return;
-    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
-        QListWidgetItem* item = ui->fileList_lw->item(i);
-        QWidget* widget = ui->fileList_lw->itemWidget(item);
-        if (widget && widget->findChild<QPushButton*>("下载") == btn) {
-            QString filename = item->data(Qt::UserRole).toString();
-            // 选择保存路径
-            QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
-            if (savePath.isEmpty()) return;
-            m_fileTransfer->downloadFile(savePath, "localhost", 8888);
-            m_downloadedFiles[filename] = savePath;
-            break;
-        }
-    }
+//    QPushButton* btn = qobject_cast<QPushButton*>(sender());
+//    if (!btn) return;
+//    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
+//        QListWidgetItem* item = ui->fileList_lw->item(i);
+//        QWidget* widget = ui->fileList_lw->itemWidget(item);
+//        if (widget && widget->findChild<QPushButton*>("下载") == btn) {
+//            QString filename = item->data(Qt::UserRole).toString();
+//            // 选择保存路径
+//            QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
+//            if (savePath.isEmpty()) return;
+//            m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+//            m_downloadedFiles[filename] = savePath;
+//            break;
+//        }
+//    }
 }
 
 void Widget::onFileOpenClicked()
 {
-    QPushButton* btn = qobject_cast<QPushButton*>(sender());
-    if (!btn) return;
-    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
-        QListWidgetItem* item = ui->fileList_lw->item(i);
-        QWidget* widget = ui->fileList_lw->itemWidget(item);
-        if (widget && widget->findChild<QPushButton*>("打开") == btn) {
-            QString filename = item->data(Qt::UserRole).toString();
-            QString localPath = m_downloadedFiles.value(filename);
-            if (!localPath.isEmpty() && QFileInfo::exists(localPath)) {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(localPath));
-            } else {
-                // 未下载则先下载再打开
-                QString savePath = QFileDialog::getSaveFileName(this, "保存并打开文件", filename);
-                if (savePath.isEmpty()) return;
-                m_fileTransfer->downloadFile(savePath, "localhost", 8888);
-                m_downloadedFiles[filename] = savePath;
-                // 下载完成后自动打开
-                connect(m_fileTransfer, &FileTransfer::downloadFinished, [savePath]() {
-                    QDesktopServices::openUrl(QUrl::fromLocalFile(savePath));
-                });
-            }
-            break;
-        }
-    }
+//    QPushButton* btn = qobject_cast<QPushButton*>(sender());
+//    if (!btn) return;
+//    for (int i = 0; i < ui->fileList_lw->count(); ++i) {
+//        QListWidgetItem* item = ui->fileList_lw->item(i);
+//        QWidget* widget = ui->fileList_lw->itemWidget(item);
+//        if (widget && widget->findChild<QPushButton*>("打开") == btn) {
+//            QString filename = item->data(Qt::UserRole).toString();
+//            QString localPath = m_downloadedFiles.value(filename);
+//            if (!localPath.isEmpty() && QFileInfo::exists(localPath)) {
+//                QDesktopServices::openUrl(QUrl::fromLocalFile(localPath));
+//            } else {
+//                // 未下载则先下载再打开
+//                QString savePath = QFileDialog::getSaveFileName(this, "保存并打开文件", filename);
+//                if (savePath.isEmpty()) return;
+//                m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+//                m_downloadedFiles[filename] = savePath;
+//                // 下载完成后自动打开
+//                connect(m_fileTransfer, &FileTransfer::downloadFinished, [savePath]() {
+//                    QDesktopServices::openUrl(QUrl::fromLocalFile(savePath));
+//                });
+//            }
+//            break;
+//        }
+//    }
 }
 
 

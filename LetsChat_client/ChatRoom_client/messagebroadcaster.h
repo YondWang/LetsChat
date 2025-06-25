@@ -57,7 +57,7 @@ private:
     QList<QByteArray> createMessagePacket(MessageType type, const QString &data);
     QList<QByteArray> createMessagePacket(MessageType type, const QByteArray &data);
     void parseMessage(const QByteArray &data);
-    static const int MAX_PACKET_SIZE = 4096;
+    static const int MAX_PACKET_SIZE = 8192;
     QTcpSocket *m_socket;
     QByteArray m_buffer;
     bool m_isConnected;
