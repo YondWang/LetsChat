@@ -18,7 +18,7 @@ public:
 
     // 文件传输接口
     void sendFile(const QString& filePath, QTcpSocket* socket);
-    void downloadFile(const QString &filename, const QString &host, quint16 port);
+    void downloadFile(const QString& filename, const QString &savepath, const QString &host, quint16 port);
 
 signals:
     void uploadProgress(qint64 bytesSent, qint64 bytesTotal);
@@ -35,10 +35,11 @@ public slots:
     void startDownloadInThread();
 
 private slots:
-    void handleDownloadReadyRead();
     void handleDownloadError(QAbstractSocket::SocketError socketError);
     void handleDownloadConnected();
     void handleDownloadDisconnected();
+    void onUploadSocketReadyRead();
+    void onDownloadSocketReadyRead();
 
 private:
     // 下载相关
@@ -46,6 +47,8 @@ private:
     QFile *m_downloadFile;
     QMutex m_downloadMutex;
     qint64 m_downloadTotalBytes;
+    qint64 m_downloadCurrentBytes;
+    QString m_downloadServerFileName;
     
     // 上传相关
     QTcpSocket *m_uploadSocket;

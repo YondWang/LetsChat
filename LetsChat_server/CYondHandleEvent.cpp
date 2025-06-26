@@ -1,4 +1,7 @@
 #include "CYondHandleEvent.h"
+#include <unistd.h>
+#include <linux/limits.h>
+#include <filesystem>
 
 void CYondHandleEvent::ProcessMessage(int clientFd, const CYondPack& msg) {
     if (msg.Size() == 0) {
@@ -63,46 +66,138 @@ void CYondHandleEvent::ProcessMessage(int clientFd, const CYondPack& msg) {
         });
         break;
 
-    case YFileAck:
-        HandleFileAck(clientFd, msg);
-        break;
-
     case YRecv: {
-        // 下载请求，msg.m_strData为文件名
-        std::string filename = msg.m_strData;
-        std::string filepath = "received_files/" + filename;
-        std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-        if (!file.is_open()) {
-            LOG_ERROR(YOND_ERR_FILE_RECV, "File not found for download: " + filepath);
-            std::string errMsg = "FILE_NOT_FOUND ";
-            CYondPack errPack(YFile, clientFd, errMsg.c_str(), errMsg.size());
-            send(clientFd, errPack.Data().data(), errPack.Size(), 0);
-            break;
-        }
-        size_t filesize = file.tellg();
-        file.seekg(0, std::ios::beg);
-        // 1. 发送文件信息
-        std::string fileInfo = "FILE " + filename + " " + std::to_string(filesize);
-        send(clientFd, fileInfo.c_str(), fileInfo.size(), 0);
-        // 2. 分块发送文件内容
-        const size_t BUF_SIZE = 8192;
-        char buf[BUF_SIZE];
-        size_t sent = 0;
-        while (sent < filesize) {
-            size_t toRead = std::min(BUF_SIZE, filesize - sent);
-            file.read(buf, toRead);
-            size_t actuallyRead = file.gcount();
-            if (actuallyRead == 0) break;
-            send(clientFd, buf, actuallyRead, 0);
-            sent += actuallyRead;
-        }
-        file.close();
-        LOG_INFO("File sent to client: " + filename);
+        StartFileDownload(clientFd, msg.m_strData);
+        break;
+    }
+    case YFileAck: {
+        AdvanceFileDownload(clientFd, msg);
         break;
     }
 
     default:
         LOG_WARNING("Unknown message type: " + std::to_string(msg.m_sCmd));
+    }
+}
+
+void CYondHandleEvent::StartFileDownload(int clientFd, const std::string& filename) {
+    char exePath[PATH_MAX] = { 0 };
+    ssize_t count = readlink("/proc/self/exe", exePath, PATH_MAX);
+    std::string exeDir;
+    if (count != -1) {
+        exePath[count] = '\0';
+        exeDir = std::filesystem::path(exePath).parent_path().string();
+    }
+    else {
+        exeDir = ".";
+    }
+    std::string filepath = exeDir + "/received_files/" + filename;
+    LOG_INFO("[YRecv] filename=" + filename + ", filepath=" + filepath);
+    std::string hex;
+    for (size_t i = 0; i < filename.size(); ++i) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02X ", (unsigned char)filename[i]);
+        hex += buf;
+    }
+    LOG_INFO("[YRecv] filename hex=" + hex);
+    std::ifstream* file = new std::ifstream(filepath, std::ios::binary | std::ios::ate);
+    if (!file->is_open()) {
+        LOG_ERROR(YOND_ERR_FILE_RECV, "[YRecv] File not found: " + filepath + ", errno=" + std::to_string(errno) + ", " + strerror(errno));
+        std::string errMsg = "FILE_NOT_FOUND ";
+        CYondPack errPack(YFile, clientFd, errMsg.c_str(), errMsg.size());
+        send(clientFd, errPack.Data().data(), errPack.Size(), 0);
+        delete file;
+        return;
+    }
+    size_t filesize = file->tellg();
+    file->seekg(0, std::ios::beg);
+
+    m_downloadStates[clientFd] = DownloadState{ file, filename, filesize, 0, 0, 0 };
+    // 1. 发送YFileStart
+    std::string fileStartData = filename + "|" + std::to_string(filesize);
+    CYondPack fileStartPack(YFileStart, clientFd, fileStartData.c_str(), fileStartData.size());
+    send(clientFd, fileStartPack.Data().data(), fileStartPack.Size(), 0);
+    LOG_INFO("[YRecv] Send YFileStart, wait for ACK(START)...");
+    // 不再阻塞recv，等主线程收到ACK后推进
+}
+
+void CYondHandleEvent::AdvanceFileDownload(int clientFd, const CYondPack& msg) {
+    auto it = m_downloadStates.find(clientFd);
+    if (it == m_downloadStates.end()) {
+        HandleFileAck(clientFd, msg); // 兼容上传
+        return;
+    }
+    auto& state = it->second;
+    LOG_INFO("[YRecv] AdvanceFileDownload: step=" + std::to_string(state.step) +
+        ", sent=" + std::to_string(state.sent) +
+        ", filesize=" + std::to_string(state.filesize) +
+        ", dataIdx=" + std::to_string(state.dataIdx) +
+        ", ackType=" + msg.m_strData);
+    if (msg.m_strData == "START" && state.step == 0) {
+        const size_t BUF_SIZE = 8192;
+        char buf[BUF_SIZE];
+        size_t toRead = std::min(BUF_SIZE, state.filesize - state.sent);
+        state.file->read(buf, toRead);
+        size_t actuallyRead = state.file->gcount();
+        LOG_INFO("[YRecv] file->read: toRead=" + std::to_string(toRead) + ", actuallyRead=" + std::to_string(actuallyRead));
+        if (actuallyRead == 0) {
+            LOG_ERROR(ERR_LOG_DOWNLOAD_FILE, "[YRecv] file.gcount()==0, break");
+            state.file->close();
+            delete state.file;
+            m_downloadStates.erase(it);
+            return;
+        }
+        LOG_INFO("[YRecv] Send YFileData idx=" + std::to_string(state.dataIdx) + ", sent=" + std::to_string(state.sent) + ", toRead=" + std::to_string(toRead));
+        CYondPack dataPack(YFileData, clientFd, buf, actuallyRead);
+        send(clientFd, dataPack.Data().data(), dataPack.Size(), 0);
+        state.sent += actuallyRead;
+        state.dataIdx++;
+        state.step = 1;
+    }
+    else if (msg.m_strData == "DATA" && state.step == 1) {
+        LOG_INFO("[YRecv] DATA分支: state.sent=" + std::to_string(state.sent) +
+            ", state.filesize=" + std::to_string(state.filesize) +
+            ", dataIdx=" + std::to_string(state.dataIdx));
+        if (state.sent < state.filesize) {
+            const size_t BUF_SIZE = 8192;
+            char buf[BUF_SIZE];
+            size_t toRead = std::min(BUF_SIZE, state.filesize - state.sent);
+            state.file->read(buf, toRead);
+            size_t actuallyRead = state.file->gcount();
+            LOG_INFO("[YRecv] file->read: toRead=" + std::to_string(toRead) + ", actuallyRead=" + std::to_string(actuallyRead));
+            if (actuallyRead == 0) {
+                LOG_ERROR(ERR_LOG_DOWNLOAD_FILE, "[YRecv] file.gcount()==0, break");
+                state.file->close();
+                delete state.file;
+                m_downloadStates.erase(it);
+                return;
+            }
+            LOG_INFO("[YRecv] Send YFileData idx=" + std::to_string(state.dataIdx) + ", sent=" + std::to_string(state.sent) + ", toRead=" + std::to_string(toRead));
+            CYondPack dataPack(YFileData, clientFd, buf, actuallyRead);
+            send(clientFd, dataPack.Data().data(), dataPack.Size(), 0);
+            state.sent += actuallyRead;
+            state.dataIdx++;
+        }
+        else {
+            LOG_INFO("[YRecv] DATA分支结束: state.sent=" + std::to_string(state.sent) +
+                ", state.filesize=" + std::to_string(state.filesize) +
+                ", dataIdx=" + std::to_string(state.dataIdx));
+            CYondPack fileEndPack(YFileEnd, clientFd, state.filename.c_str(), state.filename.size());
+            send(clientFd, fileEndPack.Data().data(), fileEndPack.Size(), 0);
+            LOG_INFO("[YRecv] All data sent, send YFileEnd, wait for ACK(END)...");
+            state.step = 2;
+        }
+    }
+    else if (msg.m_strData == "END" && state.step == 2) {
+        // 传输完成，清理状态
+        state.file->close();
+        delete state.file;
+        m_downloadStates.erase(it);
+        LOG_INFO("[YRecv] File sent to client (ACK驱动): " + msg.m_strData);
+    }
+    else {
+        // 兼容上传
+        HandleFileAck(clientFd, msg);
     }
 }
 
@@ -149,13 +244,19 @@ void CYondHandleEvent::ExtractAndProcessPackets(int clientFd) {
         if (buffer.size() < totalLen) break;
         std::string onePacket = buffer.substr(0, totalLen);
         buffer.erase(0, totalLen);
-        m_threadPool.Enqueue([this, clientFd, onePacket]() {
-            size_t packetSize = onePacket.size();
-            CYondPack pack(onePacket.c_str(), packetSize);
-            if (packetSize > 0) {
+        LOG_INFO("[ExtractAndProcessPackets] Got onePacket, size=" + std::to_string(onePacket.size()));
+        CYondPack pack(onePacket.c_str(), onePacket.size());
+        if (pack.m_sCmd == YFileAck || pack.m_sCmd == YRecv) {
+            // 下载相关包，主线程直接处理，保证顺序
+            LOG_INFO("[ProcessMessage] (direct) cmd=" + std::to_string(pack.m_sCmd) + ", data=" + pack.m_strData);
+            ProcessMessage(clientFd, pack);
+        }
+        else {
+            m_threadPool.Enqueue([this, clientFd, pack]() {
+                LOG_INFO("[ProcessMessage] (thread) cmd=" + std::to_string(pack.m_sCmd) + ", data=" + pack.m_strData);
                 ProcessMessage(clientFd, pack);
-            }
-        });
+                });
+        }
     }
 }
 
@@ -239,4 +340,34 @@ void CYondHandleEvent::HandleFileData(int clientFd, const CYondPack& msg) {
     }
     // 进度日志，不是错误
     LOG_INFO("file receiving... recv size: " + std::to_string(state.receivedSize) + " total size: " + std::to_string(state.totalSize));
+}
+
+void CYondHandleEvent::HandleFileDownload(int clientFd, const std::string& filename) {
+    // 直接调用下载状态机入口
+    StartFileDownload(clientFd, filename);
+}
+
+void CYondHandleEvent::HandleFileAck(int clientFd, const CYondPack& msg) {
+    std::lock_guard<std::mutex> lock(m_fileTransfersMutex);
+    auto it = m_fileTransfers.find(clientFd);
+    if (it == m_fileTransfers.end()) {
+        LOG_WARNING("[HandleFileAck] No active upload state for client " + std::to_string(clientFd));
+        return;
+    }
+    FileTransferState& state = it->second;
+    if (msg.m_strData == "START") {
+        // 客户端收到YFileStart后回ACK(START)，可做准备
+        LOG_INFO("[HandleFileAck] Upload: client " + std::to_string(clientFd) + " confirmed START");
+        // 可选：设置状态
+    } else if (msg.m_strData == "DATA") {
+        // 客户端收到YFileData后回ACK(DATA)，可做进度统计
+        LOG_INFO("[HandleFileAck] Upload: client " + std::to_string(clientFd) + " confirmed DATA, progress: " + std::to_string(state.receivedSize) + "/" + std::to_string(state.totalSize));
+        // 可选：统计进度、重传等
+    } else if (msg.m_strData == "END") {
+        // 客户端收到YFileEnd后回ACK(END)，可做收尾
+        LOG_INFO("[HandleFileAck] Upload: client " + std::to_string(clientFd) + " confirmed END, upload complete");
+        m_fileTransfers.erase(it);
+    } else {
+        LOG_WARNING("[HandleFileAck] Unknown ACK type: " + msg.m_strData);
+    }
 }

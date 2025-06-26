@@ -14,7 +14,15 @@
 #include "CYondPack.h"
 #include <iostream>
 #include <unordered_map>
-
+// 记录下载状态
+struct DownloadState {
+	std::ifstream* file;
+	std::string filename;
+	size_t filesize;
+	size_t sent;
+	int step; // 0=wait ACK(START), 1=wait ACK(DATA), 2=wait ACK(END)
+	int dataIdx;
+};
 // 文件传输状态结构
 struct FileTransferState {
     std::string fileName;
@@ -138,10 +146,9 @@ public:
 
 	void HandleFileEnd(int clientFd, const CYondPack& msg);
 
-	void HandleFileAck(int clientFd, const CYondPack& msg) {
-		// 处理文件传输确认消息
-		LOG_INFO("Received file transfer acknowledgment from client " + std::to_string(clientFd));
-	}
+	void HandleFileDownload(int clientFd, const std::string& filename);
+
+	void HandleFileAck(int clientFd, const CYondPack& msg);
 
 	void BroadCastToAll(int senderFd, const std::string& message, YondCmd cmd = YMsg, int userId = -1) {
 		for (auto& client : m_clientFdToIp) {
@@ -177,6 +184,8 @@ public:
 	std::unordered_map<int, std::string> m_recvBuffer;
 	//void ProcessMessage(int clientFd, const std::string& data);
 	void ProcessMessage(int clientFd, const CYondPack& msg);
+	void StartFileDownload(int clientFd, const std::string& filename);
+	void AdvanceFileDownload(int clientFd, const CYondPack& msg);
 	void ExtractAndProcessPackets(int clientFd);
 
 	// 文件传输说明：
@@ -185,5 +194,7 @@ public:
 	// 3. 客户端发送YFileEnd，通知服务端写入文件
 	// 4. 服务端收到YFileStart后，创建FileTransferState，收到YFileData时入队，收到YFileEnd后在独立线程中写入文件
 	// 5. 所有文件传输相关操作均加锁，保证线程安全
+
+	std::map<int, DownloadState> m_downloadStates;
 };
 

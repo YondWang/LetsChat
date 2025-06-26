@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QNetworkProxy>
 
 Widget::Widget(QString usrName, QWidget* parent)
 	: QWidget(parent)
@@ -107,31 +108,29 @@ void Widget::on_send_pb_clicked()
 void Widget::on_sendFile_pb_clicked()
 {
     QString filePath = QFileDialog::getOpenFileName(this, "选择要发送的文件");
-	if (filePath.isEmpty()) return;
+    if (filePath.isEmpty()) return;
 
-	// 使用FileTransfer发送文件
-	if (m_fileTransfer && m_broadcaster) {
-		// 获取socket连接
-		QTcpSocket* socket = m_broadcaster->getSocket();
-		if (socket && socket->state() == QAbstractSocket::ConnectedState) {
-			qDebug() << "开始发送文件:" << filePath;
-			m_fileTransfer->sendFile(filePath, socket);
-			
-			// 显示上传进度对话框
+    // 使用FileTransfer发送文件
+    if (m_fileTransfer) {
+        // 新建socket连接文件端口
+        QTcpSocket* fileSocket = new QTcpSocket(this);
+        fileSocket->setProxy(QNetworkProxy::NoProxy);
+        fileSocket->connectToHost("172.26.220.193", 2904); // TODO: 替换为实际服务器IP
+        if (fileSocket->waitForConnected(3000)) {
+            qDebug() << "开始发送文件:" << filePath;
+            m_fileTransfer->sendFile(filePath, fileSocket);
             m_uploadProgress = new QProgressDialog("正在上传文件...", "取消", 0, 100, this);
             m_uploadProgress->setWindowModality(Qt::NonModal);
-			m_uploadProgress->setAutoClose(true);
-			m_uploadProgress->setAutoReset(true);
-			
-			// 提示用户文件正在后台发送
-            //QMessageBox::information(this, "文件传输", "文件正在后台上传");
-		} else {
-            qDebug() << "Socket连接状态:" << (socket ? socket->state() : -1);
-            QMessageBox::warning(this, "connect error", "failed to connect to server, cant transfer the file");
-		}
-	} else {
-        qDebug() << "FileTransfer或MessageBroadcaster为空";
-	}
+            m_uploadProgress->setAutoClose(true);
+            m_uploadProgress->setAutoReset(true);
+        } else {
+            qDebug() << "文件端口Socket连接失败:" << fileSocket->errorString();
+            QMessageBox::warning(this, "connect error", "failed to connect to file server, cant transfer the file");
+            fileSocket->deleteLater();
+        }
+    } else {
+        qDebug() << "FileTransfer为空";
+    }
 }
 
 void Widget::handleMessageReceived(const QString& username, const QString& message)
@@ -167,14 +166,15 @@ void Widget::handleFileBroadcastReceived(const QString& sender, const QString& f
 void Widget::handleFileDownloadRequested(const QString& filename, const QString& sender)
 {
     QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
-	if (savePath.isEmpty()) return;
+    if (savePath.isEmpty()) return;
 
     m_downloadProgress = new QProgressDialog("正在下载文件...", "取消", 0, 100, this);
-	m_downloadProgress->setWindowModality(Qt::WindowModal);
-	m_downloadProgress->setAutoClose(true);
-	m_downloadProgress->setAutoReset(true);
+    m_downloadProgress->setWindowModality(Qt::WindowModal);
+    m_downloadProgress->setAutoClose(true);
+    m_downloadProgress->setAutoReset(true);
 
-    m_fileTransfer->downloadFile(savePath, "localhost", 8888);
+    // 只传文件名和服务器IP，filetransfer内部2904端口
+    //m_fileTransfer->downloadFile(filename, "172.26.220.193", 2904);
 }
 
 void Widget::handleDisconnected(const QString &username)
@@ -198,10 +198,16 @@ void Widget::handleUploadProgress(qint64 bytesSent, qint64 bytesTotal)
 
 void Widget::handleDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)
 {
-	if (m_downloadProgress) {
-		int percentage = (bytesReceived * 100) / bytesTotal;
-		m_downloadProgress->setValue(percentage);
-	}
+    qDebug() << "[UI] handleDownloadProgress: " << bytesReceived << "/" << bytesTotal;
+    if (!m_downloadProgress) {
+        m_downloadProgress = new QProgressDialog("正在下载文件...", "取消", 0, 100, this);
+        m_downloadProgress->setWindowModality(Qt::NonModal);
+        m_downloadProgress->setAutoClose(true);
+        m_downloadProgress->setAutoReset(true);
+        m_downloadProgress->show();
+    }
+    int percentage = (bytesTotal > 0) ? (bytesReceived * 100 / bytesTotal) : 0;
+    m_downloadProgress->setValue(percentage);
 }
 
 void Widget::handleUploadFinished()
@@ -215,11 +221,11 @@ void Widget::handleUploadFinished()
 
 void Widget::handleDownloadFinished()
 {
-	if (m_downloadProgress) {
-		m_downloadProgress->close();
-		m_downloadProgress = nullptr;
-	}
-    QMessageBox::information(this, "download done", u8"completed downloadfile");
+    if (m_downloadProgress) {
+        m_downloadProgress->close();
+        m_downloadProgress = nullptr;
+    }
+    QMessageBox::information(this, "download done", "completed downloadfile");
 }
 
 void Widget::handleFileTransferError(const QString& errorMessage)
@@ -322,7 +328,7 @@ void Widget::displayFileMessage(const QString& sender, const QString& filename, 
     connect(downloadBtn, &QPushButton::clicked, [this, filename]() {
         QString savePath = QFileDialog::getSaveFileName(this, "保存文件", filename);
         if (savePath.isEmpty()) return;
-        m_fileTransfer->downloadFile(savePath, "172.26.220.193", 2903);
+        m_fileTransfer->downloadFile(filename, savePath, "172.26.220.193", 2904);
     });
 }
 

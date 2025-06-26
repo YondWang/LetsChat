@@ -29,7 +29,7 @@ FileTransfer::FileTransfer(QObject *parent)
 {
     // 下载相关连接
     m_downloadSocket->setProxy(QNetworkProxy::NoProxy); // 禁用代理
-    connect(m_downloadSocket, &QTcpSocket::readyRead, this, &FileTransfer::handleDownloadReadyRead);
+    connect(m_downloadSocket, &QTcpSocket::readyRead, this, &FileTransfer::onDownloadSocketReadyRead);
     connect(m_downloadSocket, QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::error),
             this, &FileTransfer::handleDownloadError);
     connect(m_downloadSocket, &QTcpSocket::connected, this, &FileTransfer::handleDownloadConnected);
@@ -63,29 +63,15 @@ void FileTransfer::sendFile(const QString& filePath, QTcpSocket* socket)
 {
     m_uploadSocket = socket;
     m_uploadFilePath = filePath;
-    
-    // 更新成员变量
     m_lastSendFileName = QFileInfo(filePath).fileName();
     m_nTotalSize = QFileInfo(filePath).size();
-    
+
     qDebug() << "开始文件上传:" << m_lastSendFileName << "大小:" << m_nTotalSize;
-    
-    // 创建上传线程
-    if (m_uploadThread) {
-        m_uploadThread->quit();
-        m_uploadThread->wait();
-        delete m_uploadThread;
-    }
-    
-    m_uploadThread = new QThread();
-    this->moveToThread(m_uploadThread);
-    
-    connect(m_uploadThread, &QThread::started, this, &FileTransfer::startUploadInThread);
-    connect(m_uploadThread, &QThread::finished, [this]() {
-        this->moveToThread(QApplication::instance()->thread());
-    });
-    
-    m_uploadThread->start();
+
+    // 连接readyRead槽，解析ACK
+    connect(m_uploadSocket, &QTcpSocket::readyRead, this, &FileTransfer::onUploadSocketReadyRead);
+
+    startUploadInThread();
 }
 
 void FileTransfer::startUploadInThread()
@@ -124,39 +110,20 @@ void FileTransfer::startUploadInThread()
     file.close();
 }
 
-void FileTransfer::downloadFile(const QString& filename, const QString& host, quint16 port)
+void FileTransfer::downloadFile(const QString& filename, const QString& savepath, const QString& host, quint16 port)
 {
-    // 自动将下载路径前缀改为 ./downloadFiles/
-    QDir().mkpath("./downloadFiles");
-    QString savePath = "./downloadFiles/" + QFileInfo(filename).fileName();
-    m_downloadFilename = savePath;
+    m_downloadFilename = savepath;
     m_downloadHost = host;
-    m_downloadPort = 2904; // 强制使用2904端口
-    
+    m_downloadPort = port;
+    m_downloadServerFileName = filename;
+    qDebug() << "[downloadFile] filename param:" << filename << ", m_downloadServerFileName:" << m_downloadServerFileName;
     qDebug() << "begain download file:" << filename << "from" << host << ":" << m_downloadPort;
-    
-    // 创建下载线程
-    if (m_downloadThread) {
-        m_downloadThread->quit();
-        m_downloadThread->wait();
-        delete m_downloadThread;
-    }
-    
-    m_downloadThread = new QThread();
-    this->moveToThread(m_downloadThread);
-    
-    connect(m_downloadThread, &QThread::started, this, &FileTransfer::startDownloadInThread);
-    connect(m_downloadThread, &QThread::finished, [this]() {
-        this->moveToThread(QApplication::instance()->thread());
-    });
-    
-    m_downloadThread->start();
+    startDownloadInThread();
 }
 
 void FileTransfer::startDownloadInThread()
 {
     QMutexLocker locker(&m_downloadMutex);
-    
     m_downloadFile = new QFile(m_downloadFilename);
     if (!m_downloadFile->open(QIODevice::WriteOnly)) {
         QString errorMsg = QString("无法创建文件进行下载: %1").arg(m_downloadFile->errorString());
@@ -166,14 +133,11 @@ void FileTransfer::startDownloadInThread()
         m_downloadFile = nullptr;
         return;
     }
-
     qDebug() << "正在连接下载服务器..." << m_downloadHost << ":" << m_downloadPort;
     emit connectionStatus(QString("正在连接下载服务器 %1:%2").arg(m_downloadHost).arg(m_downloadPort));
-    
     if (m_downloadSocket->state() == QAbstractSocket::ConnectedState) {
         m_downloadSocket->disconnectFromHost();
     }
-    
     m_downloadSocket->connectToHost(m_downloadHost, m_downloadPort);
     if (!m_downloadSocket->waitForConnected(3000)) {
         QString errorMsg = QString("无法连接到下载服务器 %1:%2 - %3").arg(m_downloadHost).arg(m_downloadPort).arg(m_downloadSocket->errorString());
@@ -183,11 +147,13 @@ void FileTransfer::startDownloadInThread()
         m_downloadFile = nullptr;
         return;
     }
-
-    // 发送下载请求，格式与上传对应
-    QString requestMsg = QString("REQ %1").arg(m_downloadFilename);
-    m_downloadSocket->write(requestMsg.toUtf8());
-    qDebug() << "发送下载请求:" << requestMsg;
+    // 发送下载请求，使用YRecv协议包
+    QList<QByteArray> packets = createMessagePacket(3, m_downloadServerFileName); // 3 = YRecv
+    for (const QByteArray& packet : packets) {
+        m_downloadSocket->write(packet);
+        m_downloadSocket->waitForBytesWritten(1000);
+    }
+    qDebug() << "发送下载请求(YRecv包):" << m_downloadServerFileName;
 }
 
 void FileTransfer::sendFileStart(const QString& fileName, qint64 totalSize)
@@ -206,13 +172,12 @@ void FileTransfer::sendFileData()
 {
     if (m_fileSendQueue.isEmpty()) {
         // 发送YFileEnd，内容为文件名
-        QString fileName = m_lastSendFileName;
-        QList<QByteArray> packets = createMessagePacket(7, fileName); // YFileEnd = 7
+        QList<QByteArray> packets = createMessagePacket(7, m_lastSendFileName); // YFileEnd = 7
         for (const QByteArray& packet : packets) {
             m_uploadSocket->write(packet);
             m_uploadSocket->waitForBytesWritten(1000);
         }
-        qDebug() << "[File] Send YFileEnd:" << fileName;
+        qDebug() << "[File] Send YFileEnd:" << m_lastSendFileName;
         m_expectedAckType = "END";
         m_waitingFileAck = true;
         return;
@@ -248,58 +213,6 @@ void FileTransfer::handleFileAck(const QString& ackType)
         }
     } else {
         qDebug() << "文件确认类型不匹配:" << ackType << "!=" << m_expectedAckType;
-    }
-}
-
-void FileTransfer::handleDownloadReadyRead()
-{
-    QMutexLocker locker(&m_downloadMutex);
-    
-    if (!m_downloadFile) return;
-    
-    QByteArray data = m_downloadSocket->readAll();
-    if (data.isEmpty()) return;
-    
-    QString message = QString::fromUtf8(data);
-    qDebug() << "收到下载数据:" << message.left(100); // 只显示前100个字符
-    
-    // 处理文件信息响应，格式与上传对应
-    if (message.startsWith("FILE")) {
-        QStringList parts = message.split(" ");
-        if (parts.size() >= 3) {
-            m_downloadTotalBytes = parts[2].toLongLong();
-            qDebug() << "文件大小信息:" << m_downloadTotalBytes;
-            return;
-        }
-    }
-    
-    // 处理文件数据
-    receiveFileChunk();
-}
-
-void FileTransfer::receiveFileChunk()
-{
-    if (!m_downloadFile) return;
-    
-    QByteArray data = m_downloadSocket->readAll();
-    if (!data.isEmpty()) {
-        qint64 written = m_downloadFile->write(data);
-        if (written == -1) {
-            emit error("error process download file");
-            return;
-        }
-        
-        qint64 currentSize = m_downloadFile->size();
-        emit downloadProgress(currentSize, m_downloadTotalBytes);
-        qDebug() << QString("下载进度: %1/%2 bytes").arg(currentSize).arg(m_downloadTotalBytes);
-        
-        if (currentSize >= m_downloadTotalBytes) {
-            m_downloadFile->close();
-            delete m_downloadFile;
-            m_downloadFile = nullptr;
-            qDebug() << "文件下载完成";
-            emit downloadFinished();
-        }
     }
 }
 
@@ -381,4 +294,133 @@ QList<QByteArray> FileTransfer::createMessagePacket(int type, const QByteArray &
 QList<QByteArray> FileTransfer::createMessagePacket(int type, const QString &data)
 {
     return createMessagePacket(type, data.toUtf8());
+}
+
+// 新增：上传socket数据包解析
+void FileTransfer::onUploadSocketReadyRead()
+{
+    QByteArray data = m_uploadSocket->readAll();
+    int pos = 0;
+    while (data.size() - pos >= 12) { // 至少有头部
+        quint16 header;
+        memcpy(&header, data.constData() + pos, 2);
+        header = ntohs(header);
+        if (header != MESSAGE_HEADER) {
+            pos++;
+            continue;
+        }
+        quint32 length;
+        memcpy(&length, data.constData() + pos + 2, 4);
+        length = ntohl(length);
+        if (data.size() - pos < (int)(length + 8)) break; // 不完整
+        quint16 cmd;
+        memcpy(&cmd, data.constData() + pos + 6, 2);
+        cmd = ntohs(cmd);
+        //quint16 userId; // 跳过
+        //memcpy(&userId, data.constData() + pos + 8, 2);
+        QByteArray msgData = data.mid(pos + 10, length - 4);
+        // 校验和
+        quint16 sum;
+        memcpy(&sum, data.constData() + pos + 10 + msgData.size(), 2);
+        sum = ntohs(sum);
+        quint16 calcSum = 0;
+        for (int i = 0; i < msgData.size(); ++i) calcSum += (quint8)msgData[i];
+        if (sum != calcSum) {
+            pos += length + 8;
+            continue;
+        }
+        if (cmd == 8) { // YFileAck
+            QString ackType = QString::fromUtf8(msgData);
+            handleFileAck(ackType);
+        }
+        pos += length + 8;
+    }
+}
+
+// 新增：下载socket数据包处理
+void FileTransfer::onDownloadSocketReadyRead()
+{
+    QMutexLocker locker(&m_downloadMutex);
+    if (!m_downloadFile) { qDebug() << "[Download] 没有打开的下载文件，直接返回"; return; }
+    QByteArray data = m_downloadSocket->readAll();
+    qDebug() << "[Download] readyRead触发, data size:" << data.size();
+    int pos = 0;
+    int loopCount = 0;
+    while (data.size() - pos >= 12) { // 至少有头部
+        loopCount++;
+        qDebug() << "[Download] while " << loopCount << " times, pos=" << pos << ", remain data=" << (data.size() - pos);
+        quint16 header;
+        memcpy(&header, data.constData() + pos, 2);
+        header = ntohs(header);
+        if (header != MESSAGE_HEADER) {
+            qDebug() << "[Download] error head, skip 1 byte";
+            pos++;
+            continue;
+        }
+        quint32 length;
+        memcpy(&length, data.constData() + pos + 2, 4);
+        length = ntohl(length);
+        if (data.size() - pos < (int)(length + 8)) {
+            qDebug() << "[Download] 数据不完整, break";
+            break; // 不完整
+        }
+        quint16 cmd;
+        memcpy(&cmd, data.constData() + pos + 6, 2);
+        cmd = ntohs(cmd);
+        QByteArray msgData = data.mid(pos + 10, length - 4);
+        qDebug() << "[Download] 解析包 cmd=" << cmd << " size=" << msgData.size();
+        if (cmd == 5) { // YFileStart
+            qDebug() << "[Download] 进入YFileStart分支";
+            QString info = QString::fromUtf8(msgData);
+            QStringList parts = info.split("|");
+            if (parts.size() == 2) {
+                m_downloadServerFileName = parts[0];
+                m_downloadTotalBytes = parts[1].toLongLong();
+                m_downloadCurrentBytes = 0;
+                qDebug() << "[Download] 收到YFileStart, 文件名:" << m_downloadServerFileName << ", 总字节:" << m_downloadTotalBytes;
+                // 回ACK(START)
+                QList<QByteArray> ack = createMessagePacket(8, (QString)"START");
+                for (const QByteArray& packet : ack) {
+                    m_downloadSocket->write(packet);
+                    m_downloadSocket->waitForBytesWritten(1000);
+                }
+                m_downloadSocket->flush(); // 强制flush
+                qDebug() << "[Download] 发送ACK(START)";
+            }
+        } else if (cmd == 6) { // YFileData
+            qDebug() << "[Download] 进入YFileData分支, 写入文件";
+            m_downloadFile->write(msgData);
+            m_downloadCurrentBytes += msgData.size();
+            emit downloadProgress(m_downloadCurrentBytes, m_downloadTotalBytes);
+            qDebug() << QString("[Download] 收到YFileData, 当前进度: %1/%2").arg(m_downloadCurrentBytes).arg(m_downloadTotalBytes);
+            // 回ACK(DATA)
+            QList<QByteArray> ack = createMessagePacket(8, (QString)"DATA");
+            for (const QByteArray& packet : ack) {
+                m_downloadSocket->write(packet);
+                m_downloadSocket->waitForBytesWritten(1000);
+            }
+            m_downloadSocket->flush(); // 强制flush
+            qDebug() << "[Download] 发送ACK(DATA)";
+        } else if (cmd == 7) { // YFileEnd
+            qDebug() << "[Download] 进入YFileEnd分支, 关闭文件";
+            m_downloadFile->flush();
+            m_downloadFile->close();
+            delete m_downloadFile;
+            m_downloadFile = nullptr;
+            qDebug() << "[Download] 收到YFileEnd, 文件下载完成";
+            // 回ACK(END)
+            QList<QByteArray> ack = createMessagePacket(8, (QString)"END");
+            for (const QByteArray& packet : ack) {
+                m_downloadSocket->write(packet);
+                m_downloadSocket->waitForBytesWritten(1000);
+            }
+            m_downloadSocket->flush(); // 强制flush
+            qDebug() << "[Download] 发送ACK(END)";
+            emit downloadFinished();
+        } else {
+            qDebug() << "[Download] 未知命令:" << cmd;
+        }
+        pos += (length + 8);
+    }
+    qDebug() << "[Download] onDownloadSocketReadyRead处理结束, pos=" << pos << ", 总数据=" << data.size();
 }
