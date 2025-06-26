@@ -53,21 +53,16 @@ private slots:
     void handleUploadFinished();
     void handleDownloadFinished();
     void handleFileTransferError(const QString &errorMessage);
-    void onFileDownloadClicked();
-    void onFileOpenClicked();
-    //void on_send_btn_clicked();
-    //void on_file_btn_clicked();
+
     void displayMessage(const QString& sender, const QString& message);
     void displayFileMessage(const QString& sender, const QString& filename, qint64 filesize);
-    //void onFileTransferProgress(int progress);
-    //void onFileTransferComplete();
-    //void onFileTransferError(const QString& error);
 
 private:
     MessageBroadcaster *m_broadcaster;
     FileTransfer *m_fileTransfer;
     QString m_username;
     Ui::Widget *ui;
+    QThread m_thSendThread;
     
     QProgressDialog *m_uploadProgress;
     QProgressDialog *m_downloadProgress;

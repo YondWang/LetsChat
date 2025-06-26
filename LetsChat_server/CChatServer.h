@@ -12,7 +12,8 @@
 #include <error.h>
 
 
-#define PORT 2903
+#define MSG_PORT 2903
+#define FILE_PORT 2904
 #define MAX_EVENTS 100
 
 class CChatServer
@@ -30,43 +31,51 @@ public:
 	int StopService();
 
 	int InitSocket() {
-		if(m_nSockFd != -1) 
-			return LOG_ERROR(YOND_ERR_SOCKET_CREATE, "Socket already initialized");
-
-		m_nSockFd = socket(AF_INET, SOCK_STREAM, 0);
-		memset(&m_addr, 0, sizeof(m_addr));
-		m_addr.sin_family = AF_INET;
-		m_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-		m_addr.sin_port = htons(PORT);
-
-		if (bind(m_nSockFd, (sockaddr*)&m_addr, sizeof(m_addr))) {
-			close(m_nSockFd);
-			m_nSockFd = -1;
-			return LOG_ERROR(YOND_ERR_SOCKET_BIND, "Failed to bind socket");
+		// 消息端口
+		m_nSockFdMsg = socket(AF_INET, SOCK_STREAM, 0);
+		memset(&m_addrMsg, 0, sizeof(m_addrMsg));
+		m_addrMsg.sin_family = AF_INET;
+		m_addrMsg.sin_addr.s_addr = htonl(INADDR_ANY);
+		m_addrMsg.sin_port = htons(MSG_PORT);
+		if (bind(m_nSockFdMsg, (sockaddr*)&m_addrMsg, sizeof(m_addrMsg))) {
+			close(m_nSockFdMsg);
+			m_nSockFdMsg = -1;
+			return LOG_ERROR(YOND_ERR_SOCKET_BIND, "Failed to bind msg socket");
 		}
-
-		if (listen(m_nSockFd, 5)) {
-			close(m_nSockFd);
-			m_nSockFd = -1;
-			return LOG_ERROR(YOND_ERR_SOCKET_LISTEN, "Failed to listen on socket");
+		if (listen(m_nSockFdMsg, 5)) {
+			close(m_nSockFdMsg);
+			m_nSockFdMsg = -1;
+			return LOG_ERROR(YOND_ERR_SOCKET_LISTEN, "Failed to listen on msg socket");
 		}
-
-		if (m_nSockFd < 0) {
-			return LOG_ERROR(YOND_ERR_SOCKET_CREATE, "Failed to initialize socket");
+		// 文件端口
+		m_nSockFdFile = socket(AF_INET, SOCK_STREAM, 0);
+		memset(&m_addrFile, 0, sizeof(m_addrFile));
+		m_addrFile.sin_family = AF_INET;
+		m_addrFile.sin_addr.s_addr = htonl(INADDR_ANY);
+		m_addrFile.sin_port = htons(FILE_PORT);
+		if (bind(m_nSockFdFile, (sockaddr*)&m_addrFile, sizeof(m_addrFile))) {
+			close(m_nSockFdFile);
+			m_nSockFdFile = -1;
+			return LOG_ERROR(YOND_ERR_SOCKET_BIND, "Failed to bind file socket");
 		}
-
-		LOG_INFO("Socket initialized successfully");
+		if (listen(m_nSockFdFile, 5)) {
+			close(m_nSockFdFile);
+			m_nSockFdFile = -1;
+			return LOG_ERROR(YOND_ERR_SOCKET_LISTEN, "Failed to listen on file socket");
+		}
+		LOG_INFO("Sockets initialized successfully");
 		return 0;
 	}
 
-	CChatServer() : m_nSockFd(-1), m_nEpollFd(-1), m_bStop(true) {
+	CChatServer() : m_nSockFdMsg(-1), m_nSockFdFile(-1), m_nEpollFd(-1), m_bStop(true) {
 		LOG_INFO("Chat server instance created");
 	}
 
 private:
-	int m_nPort;
-	int m_nSockFd;
-	sockaddr_in m_addr;
+	int m_nSockFdMsg; // 消息socket
+	int m_nSockFdFile; // 文件socket
+	sockaddr_in m_addrMsg;
+	sockaddr_in m_addrFile;
 	int m_nEpollFd;
 	CYondHandleEvent m_handleEvent;
 	static CChatServer* m_instance;

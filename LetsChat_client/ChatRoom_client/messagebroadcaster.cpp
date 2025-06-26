@@ -5,10 +5,6 @@
 #include <QtEndian>  // 添加Qt的字节序转换头文件
 #include <Winsock2.h>  // 添加Winsock2.h头文件
 #pragma comment(lib, "ws2_32.lib")  // 链接Winsock库
-#include <QFile>
-#include <QFileInfo>
-#include <QtConcurrent/QtConcurrent>
-#include <QEventLoop>
 
 // 消息头部标识
 const unsigned short MESSAGE_HEADER = 0xFEFF;
@@ -19,10 +15,6 @@ MessageBroadcaster::MessageBroadcaster(QObject *parent)
     , m_isConnected(false)
     , m_currentUserId(0)
     , m_username("")
-    , m_fileSendTotal(0)
-    , m_fileSendCurrent(0)
-    , m_lastChunkSize(0)
-    , m_lastSendFileName("")
 {
     connect(m_socket, &QTcpSocket::readyRead, this, &MessageBroadcaster::handleReadyRead);
     connect(m_socket, &QTcpSocket::connected, this, &MessageBroadcaster::handleConnected);
@@ -295,83 +287,4 @@ void MessageBroadcaster::handleError(QAbstractSocket::SocketError socketError)
     QString errorMessage = m_socket->errorString();
     qDebug() << "Socket error:" << errorMessage;
     emit connectionError(errorMessage);
-}
-
-void MessageBroadcaster::sendFile(const QString& filePath)
-{
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        qDebug() << "无法打开文件:" << filePath;
-        return;
-    }
-    QString fileName = QFileInfo(filePath).fileName();
-    m_lastSendFileName = fileName;
-    qint64 totalSize = file.size();
-    m_fileSendTotal = totalSize;
-    m_fileSendCurrent = 0;
-    m_lastChunkSize = 0;
-    m_fileSendQueue.clear();
-    m_fileSendDataLens.clear();
-    m_fileSendIndex = 0;
-    m_waitingFileAck = false;
-    m_expectedAckType.clear();
-
-    // 1. 发送YFileStart（文本消息）
-    sendDataByPackCut(fileName + "|" + QString::number(totalSize), YFileStart);
-    qDebug() << "[File] Send YFileStart:" << fileName << totalSize;
-    m_expectedAckType = "START";
-    m_waitingFileAck = true;
-
-    // 连接ACK信号到槽
-    connect(this, &MessageBroadcaster::fileAckReceived, this, &MessageBroadcaster::handleFileAck, Qt::UniqueConnection);
-
-    // 2. 预分包所有YFileData，并记录每个分包的数据长度
-    while (!file.atEnd()) {
-        QByteArray chunk = file.read(8192);
-        QList<QByteArray> dataPackets = createMessagePacket(YFileData, chunk);
-        for (const QByteArray& packet : dataPackets) {
-            m_fileSendQueue.enqueue(packet);
-            m_fileSendDataLens.enqueue(chunk.size()); // 记录数据长度
-        }
-    }
-    file.close();
-}
-
-void MessageBroadcaster::sendNextFileChunk()
-{
-    if (m_fileSendQueue.isEmpty()) {
-        // 发送YFileEnd，内容为文件名
-        QString fileName = m_lastSendFileName;
-        sendDataByPackCut(fileName, YFileEnd);
-        qDebug() << "[File] Send YFileEnd:" << fileName;
-        m_expectedAckType = "END";
-        m_waitingFileAck = true;
-        return;
-    }
-    QByteArray packet = m_fileSendQueue.dequeue();
-    m_lastChunkSize = m_fileSendDataLens.dequeue(); // 只记录数据部分长度
-    m_socket->write(packet);
-    m_socket->waitForBytesWritten(1000);
-    qDebug() << QString("[File] Send YFileData chunk %1, size %2").arg(m_fileSendIndex++).arg(m_lastChunkSize);
-    m_expectedAckType = "DATA";
-    m_waitingFileAck = true;
-}
-
-void MessageBroadcaster::handleFileAck(const QString& ackType)
-{
-    if (!m_waitingFileAck) return;
-    if (ackType == m_expectedAckType) {
-        m_waitingFileAck = false;
-        if (ackType == "START") {
-            // 开始分包发送
-            sendNextFileChunk();
-        } else if (ackType == "DATA") {
-            m_fileSendCurrent += m_lastChunkSize;
-            qDebug() << QString("transfer byte info: %1/%2").arg(m_fileSendCurrent).arg(m_fileSendTotal);
-            sendNextFileChunk();
-        } else if (ackType == "END") {
-            qDebug() << "[File] complete send file";
-            disconnect(this, &MessageBroadcaster::fileAckReceived, this, &MessageBroadcaster::handleFileAck);
-        }
-    }
 }

@@ -11,7 +11,7 @@ int CChatServer::EpollDo(epoll_event* alevt) {
 			return LOG_ERROR(YOND_ERR_EPOLL_WAIT, "Failed to wait for epoll events");
 		}
 		for (int i = 0; i < eventMnt; i++) {
-			if (alevt[i].data.fd == m_nSockFd) {
+			if (alevt[i].data.fd == m_nSockFdMsg || alevt[i].data.fd == m_nSockFdFile) {
 				err = m_handleEvent.addNew(&alevt[i], m_nEpollFd);
 			}
 			else {
@@ -33,9 +33,13 @@ int CChatServer::StartService() {
 
 	struct epoll_event event, all_events[MAX_EVENTS];
 	event.events = EPOLLIN;
-	event.data.fd = m_nSockFd;
-	if (epoll_ctl(m_nEpollFd, EPOLL_CTL_ADD, m_nSockFd, &event) < 0) {
-		return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add socket to epoll");
+	event.data.fd = m_nSockFdMsg;
+	if (epoll_ctl(m_nEpollFd, EPOLL_CTL_ADD, m_nSockFdMsg, &event) < 0) {
+		return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add msg socket to epoll");
+	}
+	event.data.fd = m_nSockFdFile;
+	if (epoll_ctl(m_nEpollFd, EPOLL_CTL_ADD, m_nSockFdFile, &event) < 0) {
+		return LOG_ERROR(YOND_ERR_EPOLL_CTL, "Failed to add file socket to epoll");
 	}
 
 	err = EpollDo(all_events);
@@ -47,7 +51,8 @@ int CChatServer::StartService() {
 int CChatServer::StopService()
 {
 	m_bStop = true;
-	close(m_nSockFd);
+	close(m_nSockFdMsg);
+	close(m_nSockFdFile);
 	close(m_nEpollFd);
 	return 0;
 }

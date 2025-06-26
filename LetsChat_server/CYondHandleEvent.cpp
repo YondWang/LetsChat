@@ -67,6 +67,40 @@ void CYondHandleEvent::ProcessMessage(int clientFd, const CYondPack& msg) {
         HandleFileAck(clientFd, msg);
         break;
 
+    case YRecv: {
+        // 下载请求，msg.m_strData为文件名
+        std::string filename = msg.m_strData;
+        std::string filepath = "received_files/" + filename;
+        std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            LOG_ERROR(YOND_ERR_FILE_RECV, "File not found for download: " + filepath);
+            std::string errMsg = "FILE_NOT_FOUND ";
+            CYondPack errPack(YFile, clientFd, errMsg.c_str(), errMsg.size());
+            send(clientFd, errPack.Data().data(), errPack.Size(), 0);
+            break;
+        }
+        size_t filesize = file.tellg();
+        file.seekg(0, std::ios::beg);
+        // 1. 发送文件信息
+        std::string fileInfo = "FILE " + filename + " " + std::to_string(filesize);
+        send(clientFd, fileInfo.c_str(), fileInfo.size(), 0);
+        // 2. 分块发送文件内容
+        const size_t BUF_SIZE = 8192;
+        char buf[BUF_SIZE];
+        size_t sent = 0;
+        while (sent < filesize) {
+            size_t toRead = std::min(BUF_SIZE, filesize - sent);
+            file.read(buf, toRead);
+            size_t actuallyRead = file.gcount();
+            if (actuallyRead == 0) break;
+            send(clientFd, buf, actuallyRead, 0);
+            sent += actuallyRead;
+        }
+        file.close();
+        LOG_INFO("File sent to client: " + filename);
+        break;
+    }
+
     default:
         LOG_WARNING("Unknown message type: " + std::to_string(msg.m_sCmd));
     }

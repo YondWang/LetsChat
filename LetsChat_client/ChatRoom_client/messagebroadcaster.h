@@ -5,9 +5,6 @@
 #include <QByteArray>
 #include <QMap>
 #include <QString>
-#include <QQueue>
-#include <QWaitCondition>
-#include <QMutex>
 
 class MessageBroadcaster : public QObject
 {
@@ -34,7 +31,8 @@ public:
     void sendDataByPackCut(const QString &message, MessageType messageType = YMsg);
     void sendFileBroadcast(const QString &filename, qint64 filesize);
     void requestFileDownload(const QString &filename, const QString &sender);
-    void sendFile(const QString& filePath);
+    void setCurrentUserId(int userId) { m_currentUserId = userId; }
+    QTcpSocket* getSocket() const { return m_socket; }
 
 signals:
     void messageReceived(const QString &username, const QString &message);
@@ -46,6 +44,7 @@ signals:
     void connectionError(const QString &error);
     void connected();
     void fileAckReceived(const QString& ackType);
+
 private slots:
     void handleReadyRead();
     void handleConnected();
@@ -58,22 +57,10 @@ private:
     QList<QByteArray> createMessagePacket(MessageType type, const QByteArray &data);
     void parseMessage(const QByteArray &data);
     static const int MAX_PACKET_SIZE = 8192;
+    
     QTcpSocket *m_socket;
     QByteArray m_buffer;
     bool m_isConnected;
     int m_currentUserId;
     QString m_username;
-    qint64 m_fileSendTotal;
-    qint64 m_fileSendCurrent;
-    qint64 m_lastChunkSize;
-    bool m_waitingFileAck = false;
-    QString m_expectedAckType;
-    QQueue<QByteArray> m_fileSendQueue;
-    int m_fileSendIndex = 0;
-    QMutex m_fileSendMutex;
-    QWaitCondition m_fileSendCond;
-    void sendNextFileChunk();
-    void handleFileAck(const QString& ackType);
-    QString m_lastSendFileName;
-    QQueue<int> m_fileSendDataLens;
 }; 
